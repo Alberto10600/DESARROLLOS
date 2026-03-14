@@ -2,20 +2,16 @@ import { useState, useRef, useCallback } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import { ConvergenceChart } from './ConvergenceChart'
 import { ScatterPlot } from './ScatterPlot'
+import { BayesianOptimizer } from '../../engine/bayesian/optimizer'
+import { runBacktest, calcScore } from '../../engine/backtestEngine'
 import type {
   BayesianState,
   BayesianOptions,
   GridParams,
   OptimizationResult,
   Observation,
+  StrategyParams,
 } from '../../types'
-
-// ─── Workers ─────────────────────────────────────────────────────────────────
-// Los workers se crean por Vite en build time
-// @ts-ignore
-const GridWorker    = () => new Worker(new URL('../../engine/gridSearch/optimizer.worker.ts', import.meta.url), { type: 'module' })
-// @ts-ignore
-const BayesWorker   = () => new Worker(new URL('../../engine/bayesian/bayesian.worker.ts', import.meta.url), { type: 'module' })
 
 type OptMethod = 'grid' | 'bayesian' | 'compare'
 
@@ -33,6 +29,19 @@ const DEFAULT_BAYES_OPTIONS: BayesianOptions = {
   acquisitionFn:    'EI',
   explorationFactor: 0.01,
   nRestarts:        25,
+}
+
+// ─── Generate all grid combinations ───────────────────────────────────────────
+function generateAllCombinations(grid: GridParams): StrategyParams[] {
+  const results: StrategyParams[] = []
+  for (const swing of grid.swingLookback)
+  for (const ob of grid.obLookback)
+  for (const tp2 of grid.tp2RR)
+  for (const risk of grid.riskPct)
+  for (const sl of grid.slBuffer) {
+    results.push({ swingLookback: swing, obLookback: ob, tp1RR: 1.5, tp2RR: tp2, riskPct: risk, slBuffer: sl, compounding: true })
+  }
+  return results
 }
 
 // ─── Slider helper ────────────────────────────────────────────────────────────
@@ -112,26 +121,49 @@ export function OptimizerPage() {
   const [scatterY, setScatterY] = useState('tp2RR')
   const [startTime, setStartTime] = useState(0)
 
-  const gridWorkerRef  = useRef<Worker | null>(null)
-  const bayesWorkerRef = useRef<Worker | null>(null)
+  // Refs to cancel in-progress async runs
+  const gridCancelRef  = useRef(false)
+  const bayesOptimizerRef = useRef<BayesianOptimizer | null>(null)
 
-  // ─── Grid Search ───────────────────────────────────────────────────────────
-  const runGrid = useCallback(() => {
+  // ─── Grid Search (async, in-process with setTimeout yields) ────────────────
+  const runGrid = useCallback(async () => {
     if (!candles.length) return alert('Carga datos primero (ve a Backtesting)')
-    gridWorkerRef.current?.terminate()
-    const w = GridWorker()
-    gridWorkerRef.current = w
+
+    // Cancel any previous run
+    gridCancelRef.current = true
+    await new Promise(r => setTimeout(r, 0))
+    gridCancelRef.current = false
+
     setGridResults([])
     setGridProgress(0)
     setGridRunning(true)
-    setStartTime(Date.now())
+    const t0 = Date.now()
+    setStartTime(t0)
 
-    w.onmessage = ({ data }: { data: { type: string; pct?: number; results?: OptimizationResult[] } }) => {
-      if (data.type === 'progress') setGridProgress(data.pct ?? 0)
-      if (data.type === 'done') {
-        setGridResults(data.results ?? [])
-        setGridRunning(false)
-        if (data.results?.length) {
+    try {
+      const combos = generateAllCombinations(DEFAULT_GRID)
+      const results: OptimizationResult[] = []
+      const chunkSize = 10
+
+      for (let i = 0; i < combos.length; i += chunkSize) {
+        if (gridCancelRef.current) break
+
+        const chunk = combos.slice(i, i + chunkSize)
+        for (const params of chunk) {
+          const result = runBacktest(candles, params, config.capital)
+          results.push({ params, score: calcScore(result.metrics), metrics: result.metrics, rank: 0 })
+        }
+        const pct = Math.min(100, (i + chunkSize) / combos.length * 100)
+        setGridProgress(pct)
+        await new Promise(r => setTimeout(r, 0)) // yield to UI
+      }
+
+      if (!gridCancelRef.current) {
+        results.sort((a, b) => b.score - a.score)
+        results.forEach((r, idx) => r.rank = idx + 1)
+        const top = results.slice(0, 50)
+        setGridResults(top)
+        if (top.length) {
           addSavedOptimization({
             id: crypto.randomUUID(),
             date: new Date().toISOString(),
@@ -139,26 +171,36 @@ export function OptimizerPage() {
             symbol: config.symbol,
             interval: config.interval,
             capital: config.capital,
-            results: data.results,
-            bestParams: data.results[0].params,
-            bestMetrics: data.results[0].metrics,
-            duration: Date.now() - startTime,
+            results: top,
+            bestParams: top[0].params,
+            bestMetrics: top[0].metrics,
+            duration: Date.now() - t0,
           })
         }
       }
+    } catch (err) {
+      console.error('[Grid] Error during optimization:', err)
+    } finally {
+      setGridRunning(false)
     }
-    w.postMessage({ candles, grid: DEFAULT_GRID, capital: config.capital })
-  }, [candles, config, startTime])
+  }, [candles, config, addSavedOptimization, setGridResults, setGridProgress, setGridRunning])
 
-  const stopGrid = () => { gridWorkerRef.current?.terminate(); setGridRunning(false) }
+  const stopGrid = useCallback(() => {
+    gridCancelRef.current = true
+    setGridRunning(false)
+  }, [setGridRunning])
 
-  // ─── Bayesian Optimization ──────────────────────────────────────────────────
-  const runBayesian = useCallback(() => {
+  // ─── Bayesian Optimization (async, in-process) ──────────────────────────────
+  const runBayesian = useCallback(async () => {
     if (!candles.length) return alert('Carga datos primero (ve a Backtesting)')
-    bayesWorkerRef.current?.terminate()
-    const w = BayesWorker()
-    bayesWorkerRef.current = w
-    setStartTime(Date.now())
+
+    // Cancel previous run
+    bayesOptimizerRef.current?.stop()
+    bayesOptimizerRef.current = null
+
+    const t0 = Date.now()
+    setStartTime(t0)
+
     setBayesianState({
       observations: [], bestObservation: null,
       iteration: 0, totalIterations: bayesOptions.nInitial + bayesOptions.nIterations,
@@ -166,37 +208,50 @@ export function OptimizerPage() {
       convergenceHistory: [], allScores: [],
     })
 
-    w.onmessage = ({ data }: { data: { type: string; state?: BayesianState; observation?: Observation } }) => {
-      if (data.type === 'PROGRESS') setBayesianState({ ...(data.state!) })
-      if (data.type === 'NEW_BEST' && data.observation) {
-        // El estado se actualiza en PROGRESS, aquí solo podría hacer flash
-      }
-      if (data.type === 'DONE') {
-        setBayesianState(prev => prev ? { ...prev, isRunning: false, phase: 'done' } : null)
-        const state = useAppStore.getState().bayesianState
-        if (state?.bestObservation) {
-          addSavedOptimization({
-            id: crypto.randomUUID(),
-            date: new Date().toISOString(),
-            method: 'bayesian',
-            symbol: config.symbol,
-            interval: config.interval,
-            capital: config.capital,
-            observations: state.observations,
-            bestParams: state.bestObservation.params,
-            bestMetrics: state.bestObservation.metrics,
-            duration: Date.now() - startTime,
-          })
-        }
-      }
-    }
-    w.postMessage({ type: 'START', payload: { candles, capital: config.capital, options: bayesOptions } })
-  }, [candles, config, bayesOptions, startTime])
+    try {
+      const optimizer = new BayesianOptimizer(candles, config.capital, bayesOptions)
+      bayesOptimizerRef.current = optimizer
 
-  const stopBayesian = () => {
-    bayesWorkerRef.current?.postMessage({ type: 'STOP' })
+      await optimizer.run(
+        (state: BayesianState) => {
+          setBayesianState({ ...state })
+        },
+        (_obs: Observation) => {
+          // best observation is already reflected in state via onProgress
+        }
+      )
+
+      // Mark done
+      setBayesianState(prev => prev ? { ...prev, isRunning: false, phase: 'done' } : null)
+
+      const finalState = useAppStore.getState().bayesianState
+      if (finalState?.bestObservation) {
+        addSavedOptimization({
+          id: crypto.randomUUID(),
+          date: new Date().toISOString(),
+          method: 'bayesian',
+          symbol: config.symbol,
+          interval: config.interval,
+          capital: config.capital,
+          observations: finalState.observations,
+          bestParams: finalState.bestObservation.params,
+          bestMetrics: finalState.bestObservation.metrics,
+          duration: Date.now() - t0,
+        })
+      }
+    } catch (err) {
+      console.error('[Bayesian] Error during optimization:', err)
+      setBayesianState(prev => prev ? { ...prev, isRunning: false } : null)
+    } finally {
+      bayesOptimizerRef.current = null
+    }
+  }, [candles, config, bayesOptions, addSavedOptimization, setBayesianState])
+
+  const stopBayesian = useCallback(() => {
+    bayesOptimizerRef.current?.stop()
+    bayesOptimizerRef.current = null
     setBayesianState(prev => prev ? { ...prev, isRunning: false } : null)
-  }
+  }, [setBayesianState])
 
   // ─── Aplicar mejores parámetros ─────────────────────────────────────────────
   const applyBest = (params: typeof gridResults[0]['params']) => {

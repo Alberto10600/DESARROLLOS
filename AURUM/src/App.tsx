@@ -5,6 +5,7 @@ import { BacktestPage } from './components/BacktestPage'
 import { OptimizerPage } from './components/Optimizer/OptimizerPage'
 import { TradesTable } from './components/panels/TradesTable'
 import { SettingsPage } from './components/SettingsPage'
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 function Dashboard() {
   const { backtestResult, config } = useAppStore()
@@ -48,21 +49,23 @@ export function App() {
       <div className="flex flex-1 min-h-0">
         <Sidebar />
         <main className="flex-1 min-w-0 overflow-hidden">
-          {currentPage === 'dashboard'   && <Dashboard />}
-          {currentPage === 'backtesting' && <BacktestPage />}
-          {currentPage === 'optimizer'   && <OptimizerPage />}
+          {currentPage === 'dashboard'   && <ErrorBoundary><Dashboard /></ErrorBoundary>}
+          {currentPage === 'backtesting' && <ErrorBoundary><BacktestPage /></ErrorBoundary>}
+          {currentPage === 'optimizer'   && <ErrorBoundary><OptimizerPage /></ErrorBoundary>}
           {currentPage === 'trades'      && (
-            <div className="h-full overflow-hidden">
-              {backtestResult ? (
-                <TradesTable trades={backtestResult.trades} />
-              ) : (
-                <div className="flex items-center justify-center h-full text-slate-600">
-                  Ejecuta un backtest primero
-                </div>
-              )}
-            </div>
+            <ErrorBoundary>
+              <div className="h-full overflow-hidden">
+                {backtestResult ? (
+                  <TradesTable trades={backtestResult.trades} />
+                ) : (
+                  <div className="flex items-center justify-center h-full text-slate-600">
+                    Ejecuta un backtest primero
+                  </div>
+                )}
+              </div>
+            </ErrorBoundary>
           )}
-          {currentPage === 'settings'    && <SettingsPage />}
+          {currentPage === 'settings'    && <ErrorBoundary><SettingsPage /></ErrorBoundary>}
         </main>
       </div>
     </div>
