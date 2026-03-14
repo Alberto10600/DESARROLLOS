@@ -1,12 +1,15 @@
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
-import path from 'path'
+import { resolve } from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig({
   main: {
     build: {
       lib: {
-        entry: path.resolve(__dirname, 'electron/main.ts')
+        entry: resolve(__dirname, 'electron/main.ts')
       },
       rollupOptions: {
         external: ['electron-store']
@@ -16,7 +19,7 @@ export default defineConfig({
   preload: {
     build: {
       lib: {
-        entry: path.resolve(__dirname, 'electron/preload.ts')
+        entry: resolve(__dirname, 'electron/preload.ts')
       },
       rollupOptions: {
         external: ['electron-store']
@@ -24,15 +27,15 @@ export default defineConfig({
     }
   },
   renderer: {
-    root: '.',
+    root: resolve(__dirname, '.'),
     build: {
       rollupOptions: {
-        input: path.resolve(__dirname, 'index.html')
+        input: resolve(__dirname, 'index.html')
       }
     },
     plugins: [react()],
     resolve: {
-      alias: { '@': path.resolve(__dirname, './src') }
+      alias: { '@': resolve(__dirname, 'src') }
     },
     worker: { format: 'es' },
     server: { port: 5173 },
