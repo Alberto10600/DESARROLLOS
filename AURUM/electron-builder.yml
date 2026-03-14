@@ -1,0 +1,27 @@
+appId: com.aurum.backtester
+productName: AURUM
+copyright: Copyright © 2025 AURUM
+
+directories:
+  output: dist-electron
+
+files:
+  - dist/**/*
+  - electron/**/*
+
+win:
+  target: nsis
+  icon: assets/icon.ico
+
+mac:
+  target: dmg
+  icon: assets/icon.icns
+  category: public.app-category.finance
+
+linux:
+  target: AppImage
+  icon: assets/icon.png
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
