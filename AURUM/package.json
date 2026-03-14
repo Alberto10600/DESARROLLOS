@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "AURUM - Advanced Algorithmic Backtesting & Trading Bot with SMC + Bayesian Optimization",
   "main": "out/main/index.js",
-  "scripts": {
+  "scripts": { 
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
