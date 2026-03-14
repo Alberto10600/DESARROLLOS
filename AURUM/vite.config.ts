@@ -5,6 +5,9 @@ import path from 'path'
 export default defineConfig({
   main: {
     build: {
+      lib: {
+        entry: path.resolve(__dirname, 'electron/main.ts')
+      },
       rollupOptions: {
         external: ['electron-store']
       }
@@ -12,12 +15,21 @@ export default defineConfig({
   },
   preload: {
     build: {
+      lib: {
+        entry: path.resolve(__dirname, 'electron/preload.ts')
+      },
       rollupOptions: {
         external: ['electron-store']
       }
     }
   },
   renderer: {
+    root: '.',
+    build: {
+      rollupOptions: {
+        input: path.resolve(__dirname, 'index.html')
+      }
+    },
     plugins: [react()],
     resolve: {
       alias: { '@': path.resolve(__dirname, './src') }

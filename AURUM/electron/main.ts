@@ -15,7 +15,7 @@ function createWindow(): void {
     frame: false,                    // Titlebar custom
     backgroundColor: '#040810',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -27,7 +27,7 @@ function createWindow(): void {
     win.loadURL('http://localhost:5173')
     // win.webContents.openDevTools()
   } else {
-    win.loadFile(path.join(__dirname, '../dist/index.html'))
+    win.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
 
   // ── Window controls (frameless) ──────────────────────────────────────────
