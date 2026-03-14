@@ -11,8 +11,14 @@ import { runBacktest } from '../engine/backtestEngine'
 
 type Tab = 'equity' | 'drawdown' | 'yearly' | 'trades'
 
-const INTERVALS = ['1day', '4h', '1h', '30min'] as const
-const SYMBOLS   = ['XAU/USD', 'BTC/USD', 'EUR/USD', 'SPY', 'AAPL'] as const
+const POPULAR_SYMBOLS = ['XAU/USD', 'BTC/USD', 'EUR/USD', 'NAS100', 'SPY', 'ETH/USD', 'AAPL', 'TSLA'] as const
+
+const INTERVALS: { label: string; value: string }[] = [
+  { label: '1D',   value: '1day'  },
+  { label: '4H',   value: '4h'    },
+  { label: '1H',   value: '1h'    },
+  { label: '30M',  value: '30min' },
+]
 
 export function BacktestPage() {
   const {
@@ -25,6 +31,8 @@ export function BacktestPage() {
 
   const [tab, setTab] = useState<Tab>('equity')
   const [dataSource, setDataSource] = useState<'live' | 'cache' | 'demo' | null>(null)
+  const [customSymbol, setCustomSymbol] = useState('')
+  const [startDate, setStartDate] = useState('2019-01-01')
 
   const handleFetchData = async () => {
     setLoadingCandles(true)
@@ -34,7 +42,7 @@ export function BacktestPage() {
         config.symbol,
         config.interval,
         config.apiKey,
-        '2019-01-01'
+        startDate
       )
       setCandles(result.candles)
       setDataSource(result.source)
@@ -68,6 +76,18 @@ export function BacktestPage() {
     }, 0)
   }
 
+  const handleCustomSymbol = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && customSymbol.trim()) {
+      setConfig({ symbol: customSymbol.trim().toUpperCase() })
+      setCustomSymbol('')
+    }
+  }
+
+  // Candle date range for status badge
+  const candleDateRange = candles.length > 0
+    ? `${candles[0].date.slice(0, 10)} → ${candles[candles.length - 1].date.slice(0, 10)}`
+    : null
+
   const metrics = backtestResult?.metrics
 
   return (
@@ -76,48 +96,59 @@ export function BacktestPage() {
       {/* ── Controles ───────────────────────────────────────────────────────── */}
       <div className="bg-[#070d1a] border border-slate-800 rounded-lg p-4">
         <div className="grid grid-cols-2 gap-x-8 gap-y-3">
-          {/* Fila 1 */}
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-slate-500">Símbolo</label>
-              <select
-                value={config.symbol}
-                onChange={e => setConfig({ symbol: e.target.value })}
-                className="bg-slate-800 text-slate-200 text-xs px-2 py-1 rounded border border-slate-700"
+
+          {/* Symbol chips */}
+          <div className="col-span-2 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-slate-500 shrink-0">Símbolo</span>
+            {POPULAR_SYMBOLS.map(sym => (
+              <button
+                key={sym}
+                onClick={() => setConfig({ symbol: sym })}
+                className={`px-2.5 py-1 text-xs rounded-full border transition-all ${
+                  config.symbol === sym
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-semibold'
+                    : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-500 hover:text-slate-200'
+                }`}
               >
-                {SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-slate-500">Intervalo</label>
-              <select
-                value={config.interval}
-                onChange={e => setConfig({ interval: e.target.value })}
-                className="bg-slate-800 text-slate-200 text-xs px-2 py-1 rounded border border-slate-700"
-              >
-                {INTERVALS.map(i => <option key={i} value={i}>{i}</option>)}
-              </select>
-            </div>
-            <button
-              onClick={handleFetchData}
-              disabled={isLoadingCandles}
-              className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs rounded transition-colors disabled:opacity-50"
-            >
-              {isLoadingCandles ? '⟳ Cargando…' : '⬇ Cargar datos'}
-            </button>
-            {dataSource && (
-              <span className={`text-[10px] px-2 py-0.5 rounded font-mono ${
-                dataSource === 'cache' ? 'bg-slate-700 text-slate-400' :
-                dataSource === 'demo'  ? 'bg-amber-900/50 text-amber-400' :
-                'bg-emerald-900/50 text-emerald-400'
-              }`}>
-                {dataSource.toUpperCase()}
+                {sym}
+              </button>
+            ))}
+            <input
+              type="text"
+              value={customSymbol}
+              onChange={e => setCustomSymbol(e.target.value.toUpperCase())}
+              onKeyDown={handleCustomSymbol}
+              placeholder="Otro… (Enter)"
+              className="bg-slate-800 text-slate-300 text-xs px-2.5 py-1 rounded-full border border-dashed border-slate-600 w-28 placeholder:text-slate-600 focus:outline-none focus:border-amber-500/50"
+            />
+            {!POPULAR_SYMBOLS.includes(config.symbol as typeof POPULAR_SYMBOLS[number]) && (
+              <span className="px-2.5 py-1 text-xs rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/50 font-semibold">
+                {config.symbol}
               </span>
             )}
-            {candles.length > 0 && (
-              <span className="text-xs text-slate-600">{candles.length} velas</span>
-            )}
           </div>
+
+          {/* Timeframe buttons */}
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-500">Intervalo</span>
+            <div className="flex rounded overflow-hidden border border-slate-700">
+              {INTERVALS.map(tf => (
+                <button
+                  key={tf.value}
+                  onClick={() => setConfig({ interval: tf.value })}
+                  className={`px-3 py-1.5 text-xs font-mono font-semibold transition-colors ${
+                    config.interval === tf.value
+                      ? 'bg-amber-500/20 text-amber-300'
+                      : 'bg-slate-800 text-slate-500 hover:text-slate-300'
+                  }`}
+                >
+                  {tf.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Capital */}
           <div className="flex items-center gap-3">
             <label className="text-xs text-slate-500">Capital €</label>
             <input
@@ -125,6 +156,44 @@ export function BacktestPage() {
               onChange={e => setConfig({ capital: Number(e.target.value) })}
               className="w-24 bg-slate-800 text-slate-200 text-xs px-2 py-1 rounded border border-slate-700"
             />
+          </div>
+
+          {/* Start date */}
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-slate-500">Desde</label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={e => setStartDate(e.target.value)}
+              className="bg-slate-800 text-slate-200 text-xs px-2 py-1 rounded border border-slate-700 cursor-pointer"
+            />
+            <button
+              onClick={handleFetchData}
+              disabled={isLoadingCandles}
+              className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs rounded transition-colors disabled:opacity-50"
+            >
+              {isLoadingCandles ? '⟳ Cargando…' : '⬇ Cargar datos'}
+            </button>
+
+            {/* Data status badge */}
+            {candles.length > 0 ? (
+              <div className={`flex items-center gap-2 px-2 py-0.5 rounded text-[10px] font-mono border ${
+                dataSource === 'cache' ? 'bg-slate-700/50 text-slate-400 border-slate-600' :
+                dataSource === 'demo'  ? 'bg-amber-900/30 text-amber-400 border-amber-800/50' :
+                'bg-emerald-900/30 text-emerald-400 border-emerald-800/50'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  dataSource === 'cache' ? 'bg-slate-400' :
+                  dataSource === 'demo'  ? 'bg-amber-400' :
+                  'bg-emerald-400'
+                }`} />
+                <span className="font-bold">{candles.length.toLocaleString()} velas</span>
+                {candleDateRange && <span className="text-slate-500">{candleDateRange}</span>}
+                {dataSource && <span className="opacity-60">· {dataSource.toUpperCase()}</span>}
+              </div>
+            ) : (
+              <span className="text-[10px] text-slate-600">Sin datos cargados</span>
+            )}
           </div>
 
           {/* Sliders */}

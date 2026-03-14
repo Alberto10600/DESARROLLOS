@@ -211,7 +211,7 @@ export interface AppConfig {
 
 // ─── App State (Zustand) ──────────────────────────────────────────────────────
 
-export type AppPage = 'dashboard' | 'backtesting' | 'optimizer' | 'trades' | 'settings'
+export type AppPage = 'dashboard' | 'backtesting' | 'optimizer' | 'trades' | 'strategy' | 'settings'
 
 export interface AppState {
   // Navigation

@@ -5,6 +5,7 @@ import { BacktestPage } from './components/BacktestPage'
 import { OptimizerPage } from './components/Optimizer/OptimizerPage'
 import { TradesTable } from './components/panels/TradesTable'
 import { SettingsPage } from './components/SettingsPage'
+import { StrategyEditorPage } from './components/StrategyEditor/StrategyEditorPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
 
 function Dashboard() {
@@ -65,6 +66,7 @@ export function App() {
               </div>
             </ErrorBoundary>
           )}
+          {currentPage === 'strategy'    && <ErrorBoundary><StrategyEditorPage /></ErrorBoundary>}
           {currentPage === 'settings'    && <ErrorBoundary><SettingsPage /></ErrorBoundary>}
         </main>
       </div>

@@ -11,6 +11,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard',   label: 'Dashboard',   icon: '◈' },
   { id: 'backtesting', label: 'Backtesting', icon: '◎' },
   { id: 'optimizer',   label: 'Optimizer',   icon: '⚡' },
+  { id: 'strategy',    label: 'Estrategia',  icon: '⚙' },
   { id: 'trades',      label: 'Trades Log',  icon: '▦' },
   { id: 'settings',    label: 'Settings',    icon: '◌' },
 ]
