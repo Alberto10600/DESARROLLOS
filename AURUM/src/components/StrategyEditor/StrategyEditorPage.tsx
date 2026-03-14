@@ -221,6 +221,17 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
   return signals
 }`
 
+// ─── Local Signal type (mirrors internal Signal from smcStrategy) ─────────────
+
+interface DetectedSignal {
+  index: number
+  direction: 'LONG' | 'SHORT'
+  entry: number
+  sl: number
+  obHigh: number
+  obLow: number
+}
+
 // ─── Parameter Definitions ────────────────────────────────────────────────────
 
 interface ParamDef {
@@ -496,10 +507,10 @@ export function StrategyEditorPage() {
 
   const localParams = strategyParams
 
-  const signals = useMemo(() => {
+  const signals = useMemo<DetectedSignal[]>(() => {
     if (candles.length === 0) return []
     try {
-      return detectSignals(candles, localParams).slice(-20).reverse()
+      return (detectSignals(candles, localParams) as DetectedSignal[]).slice(-20).reverse()
     } catch {
       return []
     }
@@ -528,7 +539,7 @@ export function StrategyEditorPage() {
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-slate-600 font-mono">v1.0.0</span>
           <button
-            onClick={() => setShowApplyNote(v => !v)}
+            onClick={() => setShowApplyNote((v: boolean) => !v)}
             className="px-3 py-1.5 text-xs bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 rounded transition-colors"
           >
             Aplicar cambios
@@ -679,7 +690,7 @@ export function StrategyEditorPage() {
                           max={p.max}
                           step={p.step}
                           value={currentVal}
-                          onChange={e =>
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                             setStrategyParams({ [p.key]: Number(e.target.value) })
                           }
                           className="w-full h-1.5 rounded-full appearance-none bg-slate-700 accent-amber-500 cursor-pointer"
@@ -828,7 +839,7 @@ export function StrategyEditorPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {signals.map((sig, idx) => {
+                      {signals.map((sig: DetectedSignal, idx: number) => {
                         const risk = sig.direction === 'LONG'
                           ? sig.entry - sig.sl
                           : sig.sl - sig.entry
@@ -880,12 +891,12 @@ export function StrategyEditorPage() {
                     },
                     {
                       label: 'LONG',
-                      value: `${signals.filter(s => s.direction === 'LONG').length}`,
+                      value: `${signals.filter((s: DetectedSignal) => s.direction === 'LONG').length}`,
                       color: 'text-emerald-400',
                     },
                     {
                       label: 'SHORT',
-                      value: `${signals.filter(s => s.direction === 'SHORT').length}`,
+                      value: `${signals.filter((s: DetectedSignal) => s.direction === 'SHORT').length}`,
                       color: 'text-red-400',
                     },
                     {
