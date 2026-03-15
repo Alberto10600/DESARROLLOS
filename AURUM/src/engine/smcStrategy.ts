@@ -1,22 +1,18 @@
 /**
- * SMC Strategy Engine
+ * SMC Strategy Engine — v2
  * Detecta señales basadas en Smart Money Concepts:
  *   1. Swing High/Low
- *   2. Liquidity Sweep
+ *   2. Liquidity Sweep (con filtro de extensión mínima)
  *   3. CHoCH (Change of Character)
- *   4. Order Block (OB)
- *   5. Entry al retesteo del OB
+ *   4. Order Block (OB) — solo OBs de calidad (body ratio)
+ *   5. FVG (Fair Value Gap) — confluencia con el OB
+ *   6. Mitigation check — OBs ya testeados son descartados
+ *   7. Entry al retesteo del OB
  */
 
 import type { Candle, StrategyParams, Trade } from '../types'
 
 // ─── Signal Internal Types ────────────────────────────────────────────────────
-
-interface SwingPoint {
-  index: number
-  price: number
-  type: 'high' | 'low'
-}
 
 interface Signal {
   index: number            // vela de entrada
@@ -67,6 +63,62 @@ function isAsiaSession(date: Date): boolean {
   return h < 3
 }
 
+/**
+ * Detecta Fair Value Gap (FVG / Imbalance) entre dos índices.
+ * Un FVG alcista existe cuando candle[n].high < candle[n+2].low (gap up).
+ * Un FVG bajista existe cuando candle[n].low > candle[n+2].high (gap down).
+ * Buscamos un FVG entre el OB y la vela de sweep que refuerce el setup.
+ */
+function hasFVG(candles: Candle[], fromIdx: number, toIdx: number, direction: 'LONG' | 'SHORT'): boolean {
+  for (let i = fromIdx; i <= toIdx - 2; i++) {
+    if (i < 0 || i + 2 >= candles.length) continue
+    if (direction === 'LONG') {
+      // FVG alcista: hueco entre high[i] y low[i+2]
+      if (candles[i].high < candles[i + 2].low) return true
+    } else {
+      // FVG bajista: hueco entre low[i] y high[i+2]
+      if (candles[i].low > candles[i + 2].high) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Verifica si el Order Block ha sido mitigado (ya testeado) entre obIndex y sweepIndex.
+ * Un OB bajista es mitigado si price ha subido hasta ob.high después de su formación.
+ * Un OB alcista es mitigado si price ha bajado hasta ob.low después de su formación.
+ */
+function isOBMitigated(
+  candles: Candle[],
+  obIndex: number,
+  sweepIndex: number,
+  direction: 'LONG' | 'SHORT',
+  obHigh: number,
+  obLow: number
+): boolean {
+  for (let i = obIndex + 1; i < sweepIndex; i++) {
+    if (i >= candles.length) break
+    if (direction === 'SHORT') {
+      // OB bajista: si precio regresó al high del OB entre formación y sweep, está mitigado
+      if (candles[i].high >= obHigh) return true
+    } else {
+      // OB alcista: si precio regresó al low del OB entre formación y sweep, está mitigado
+      if (candles[i].low <= obLow) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Calidad del Order Block: ratio del cuerpo respecto al rango total.
+ * Un OB fuerte tiene un cuerpo grande (> 40% del rango total de la vela).
+ */
+function obBodyRatio(candle: Candle): number {
+  const range = candle.high - candle.low
+  if (range <= 0) return 0
+  return Math.abs(candle.close - candle.open) / range
+}
+
 // ─── Signal Detection ─────────────────────────────────────────────────────────
 
 export function detectSignals(candles: Candle[], params: StrategyParams): Signal[] {
@@ -84,6 +136,11 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
     useNYSession,
     useAsiaSession,
     minRiskReward = 1,
+    // Nuevos parámetros v2
+    obMinBodyRatio = 0.35,      // OB debe tener cuerpo ≥ 35% del rango
+    requireFVG = false,          // Requerir FVG como confluencia
+    checkMitigation = true,      // Descartar OBs ya mitigados
+    minSweepExtPct = 0,          // % mínimo de extensión del wick sobre el swing (0 = desactivado)
   } = params
 
   const signals: Signal[] = []
@@ -104,8 +161,6 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
       const period = trendFilter === 'ema50' ? 50 : 200
       const ema = getEMA(candles, period, i)
       const price = candles[i].close
-      // Solo trades en dirección de la tendencia se considerarán más adelante
-      // aquí solo calculamos para validar
       if (Math.abs(price - ema) / ema < (params.trendStrength ?? 0)) continue
     }
 
@@ -129,24 +184,41 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
     const c = candles[i]
 
     // ── 2. Liquidity Sweep + CHoCH ────────────────────────────────────────────
+
     // SHORT SETUP: barrido alcista (wick sube sobre swingHigh y cierra debajo)
     if (
       c.high > swingHigh &&
       c.close < swingHigh &&
       i > swingHighIdx
     ) {
+      // Filtro de extensión mínima del sweep
+      if (minSweepExtPct > 0) {
+        const extPct = (c.high - swingHigh) / swingHigh * 100
+        if (extPct < minSweepExtPct) continue
+      }
+
       // Buscar Order Block: última vela alcista antes del impulso bajista
       let obIndex = -1
       for (let k = i - 1; k >= Math.max(0, i - obLookback); k--) {
         if (candles[k].close > candles[k].open) {
-          obIndex = k
-          break
+          // Filtro de calidad del OB
+          if (obBodyRatio(candles[k]) >= obMinBodyRatio) {
+            obIndex = k
+            break
+          }
         }
       }
       if (obIndex < 0) continue
 
       const ob = candles[obIndex]
-      const sl  = ob.high + slBuffer
+
+      // ── Mitigation check: OB no debe haber sido ya testeado
+      if (checkMitigation && isOBMitigated(candles, obIndex, i, 'SHORT', ob.high, ob.low)) continue
+
+      // ── FVG confluence (opcional)
+      if (requireFVG && !hasFVG(candles, obIndex, i, 'SHORT')) continue
+
+      const sl   = ob.high + slBuffer
       const risk = sl - ob.low
       if (risk <= 0) continue
 
@@ -178,17 +250,33 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
       c.close > swingLow &&
       i > swingLowIdx
     ) {
+      // Filtro de extensión mínima del sweep
+      if (minSweepExtPct > 0) {
+        const extPct = (swingLow - c.low) / swingLow * 100
+        if (extPct < minSweepExtPct) continue
+      }
+
       // Buscar Order Block: última vela bajista antes del impulso alcista
       let obIndex = -1
       for (let k = i - 1; k >= Math.max(0, i - obLookback); k--) {
         if (candles[k].close < candles[k].open) {
-          obIndex = k
-          break
+          // Filtro de calidad del OB
+          if (obBodyRatio(candles[k]) >= obMinBodyRatio) {
+            obIndex = k
+            break
+          }
         }
       }
       if (obIndex < 0) continue
 
       const ob = candles[obIndex]
+
+      // ── Mitigation check: OB no debe haber sido ya testeado
+      if (checkMitigation && isOBMitigated(candles, obIndex, i, 'LONG', ob.high, ob.low)) continue
+
+      // ── FVG confluence (opcional)
+      if (requireFVG && !hasFVG(candles, obIndex, i, 'LONG')) continue
+
       const sl   = ob.low - slBuffer
       const risk = ob.high - sl
       if (risk <= 0) continue

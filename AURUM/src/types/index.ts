@@ -36,6 +36,15 @@ export interface StrategyParams {
   compounding?: boolean
   maxDailyLoss?: number
   maxConsecutiveLosses?: number
+
+  // ── Parámetros v2: calidad de señal ───────────────────────────────────────
+  obMinBodyRatio?: number      // ratio mínimo body/rango del OB (0.0-1.0), default 0.35
+  requireFVG?: boolean         // exigir FVG entre OB y sweep como confluencia
+  checkMitigation?: boolean    // descartar OBs ya testeados (mitigados), default true
+  minSweepExtPct?: number      // extensión mínima del wick sobre el swing (% del precio)
+
+  // ── Parámetros v2: gestión de riesgo ─────────────────────────────────────
+  breakEven?: boolean          // mover SL a entry tras alcanzar TP1
 }
 
 // ─── Trade ────────────────────────────────────────────────────────────────────

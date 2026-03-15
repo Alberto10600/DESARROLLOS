@@ -46,7 +46,7 @@ export function ScatterPlot({ observations, xKey, yKey }: Props) {
 
     // Ordenar por score para que los mejores queden encima
     const sorted = [...observations].sort((a, b) => a.score - b.score)
-    const bestObs = observations.reduce((best, o) => o.score > best.score ? o : best)
+    const bestObs = observations.reduce((best, o) => o.score > best.score ? o : best, observations[0])
 
     for (const obs of sorted) {
       const x = xS((obs.params as Record<string, number>)[xKey] ?? 0)

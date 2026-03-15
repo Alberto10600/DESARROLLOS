@@ -446,7 +446,7 @@ export function OptimizerPage() {
             {/* Convergencia */}
             <div className="flex-1 bg-[#070d1a] border border-slate-800 rounded-lg p-3">
               <p className="text-xs text-slate-500 mb-2">Convergencia</p>
-              {bayesianState && bayesianState.convergenceHistory.length > 0 ? (
+              {bayesianState && (bayesianState.convergenceHistory?.length ?? 0) > 0 ? (
                 <div className="h-36">
                   <ConvergenceChart
                     convergenceHistory={bayesianState.convergenceHistory}
@@ -479,7 +479,7 @@ export function OptimizerPage() {
                   )}
                 </select>
               </div>
-              {bayesianState && bayesianState.observations.length > 0 ? (
+              {bayesianState && (bayesianState.observations?.length ?? 0) > 0 ? (
                 <div className="h-36">
                   <ScatterPlot
                     observations={bayesianState.observations}
@@ -538,11 +538,11 @@ export function OptimizerPage() {
           )}
 
           {/* Historial de observaciones Bayesian */}
-          {bayesianState && bayesianState.observations.length > 0 && (
+          {bayesianState && (bayesianState.observations?.length ?? 0) > 0 && (
             <div className="flex-1 bg-[#070d1a] border border-slate-800 rounded-lg overflow-hidden min-h-0">
               <div className="p-3 border-b border-slate-800">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                  Historial de Observaciones ({bayesianState.observations.length})
+                  Historial de Observaciones ({bayesianState.observations?.length ?? 0})
                 </h3>
               </div>
               <div className="overflow-auto h-full">

@@ -11,7 +11,7 @@ export function ConvergenceChart({ convergenceHistory, allScores, nInitial }: Pr
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || convergenceHistory.length === 0) return
+    if (!canvas || !convergenceHistory || convergenceHistory.length === 0) return
     const ctx = canvas.getContext('2d')!
     const dpr = window.devicePixelRatio || 1
     const w = canvas.offsetWidth, h = canvas.offsetHeight
@@ -24,7 +24,7 @@ export function ConvergenceChart({ convergenceHistory, allScores, nInitial }: Pr
     ctx.clearRect(0, 0, w, h)
 
     const n = convergenceHistory.length
-    const allVals = [...convergenceHistory, ...allScores].filter(v => isFinite(v))
+    const allVals = [...convergenceHistory, ...(allScores ?? [])].filter(v => isFinite(v))
     const minV = Math.min(...allVals, 0)
     const maxV = Math.max(...allVals, 1)
     const range = maxV - minV || 1

@@ -44,6 +44,7 @@ export function runBacktest(
     maxConsecutiveLosses = 99,
     trailingStop = false,
     trailingFactor = 1,
+    breakEven = false,
   } = params
 
   const signals = detectSignals(candles, params)
@@ -115,6 +116,8 @@ export function runBacktest(
           tp1Hit = true
           pnl += sizeEur * 0.5 * tp1RR   // cerrar 50% en TP1
           pnl += sizeEur * 0.5            // recuperar el riesgo de esa mitad
+          // Break-even: mover SL a entry tras TP1
+          if (breakEven && sig.entry > currentSl) currentSl = sig.entry
         }
 
         if (bar.low <= currentSl) {
@@ -153,6 +156,8 @@ export function runBacktest(
           tp1Hit = true
           pnl += sizeEur * 0.5 * tp1RR
           pnl += sizeEur * 0.5
+          // Break-even: mover SL a entry tras TP1
+          if (breakEven && sig.entry < currentSl) currentSl = sig.entry
         }
 
         if (bar.high >= currentSl) {
