@@ -153,6 +153,80 @@ function isAsiaSession(date: Date): boolean {
 }
 
 /**
+ * Strict session windows for highest-quality setups:
+ * - London open: 07:00-09:00 UTC
+ * - NY open: 13:30-15:30 UTC
+ */
+function isStrictSessionWindow(date: Date): boolean {
+  const h = date.getUTCHours()
+  const m = date.getUTCMinutes()
+  const totalMinutes = h * 60 + m
+  // London open: 07:00 to 09:00 (420 to 540 minutes)
+  const londonOpen = totalMinutes >= 420 && totalMinutes < 540
+  // NY open: 13:30 to 15:30 (810 to 930 minutes)
+  const nyOpen = totalMinutes >= 810 && totalMinutes < 930
+  return londonOpen || nyOpen
+}
+
+/**
+ * Returns the average volume over the last `period` candles ending at `index`.
+ */
+function getAvgVolume(candles: Candle[], period: number, index: number): number {
+  let sum = 0
+  let count = 0
+  for (let i = Math.max(0, index - period + 1); i <= index; i++) {
+    if (candles[i].volume !== undefined) {
+      sum += candles[i].volume!
+      count++
+    }
+  }
+  return count > 0 ? sum / count : 0
+}
+
+/**
+ * Finds the nearest FVG level that can serve as a TP target.
+ * For LONG: looks for a bearish FVG (gap down) above current price — price will fill it.
+ * For SHORT: looks for a bullish FVG (gap up) below current price — price will fill it.
+ * Returns the fill level (midpoint of the gap) or null if none found.
+ */
+function findNearestFVGTarget(
+  candles: Candle[],
+  fromIdx: number,
+  direction: 'LONG' | 'SHORT',
+  entryPrice: number,
+  lookAhead = 50
+): number | null {
+  const end = Math.min(candles.length - 3, fromIdx + lookAhead)
+  let bestTarget: number | null = null
+  let bestDist = Infinity
+
+  for (let i = Math.max(0, fromIdx - lookAhead); i <= end; i++) {
+    if (i + 2 >= candles.length) break
+    if (direction === 'LONG') {
+      // Bearish FVG above entry: candle[i].low > candle[i+2].high — gap down that price left unfilled above
+      if (candles[i].low > candles[i + 2].high) {
+        const fvgMid = (candles[i].low + candles[i + 2].high) / 2
+        if (fvgMid > entryPrice) {
+          const dist = fvgMid - entryPrice
+          if (dist < bestDist) { bestDist = dist; bestTarget = fvgMid }
+        }
+      }
+    } else {
+      // Bullish FVG below entry: candle[i].high < candle[i+2].low — gap up that price left unfilled below
+      if (candles[i].high < candles[i + 2].low) {
+        const fvgMid = (candles[i].high + candles[i + 2].low) / 2
+        if (fvgMid < entryPrice) {
+          const dist = entryPrice - fvgMid
+          if (dist < bestDist) { bestDist = dist; bestTarget = fvgMid }
+        }
+      }
+    }
+  }
+
+  return bestTarget
+}
+
+/**
  * Detecta Fair Value Gap (FVG / Imbalance) entre dos índices.
  * Un FVG alcista existe cuando candle[n].high < candle[n+2].low (gap up).
  * Un FVG bajista existe cuando candle[n].low > candle[n+2].high (gap down).
@@ -225,33 +299,39 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
     useNYSession,
     useAsiaSession,
     minRiskReward = 1,
-    // Nuevos parámetros v2
-    obMinBodyRatio = 0.35,      // OB debe tener cuerpo ≥ 35% del rango
-    requireFVG = false,          // Requerir FVG como confluencia
-    checkMitigation = true,      // Descartar OBs ya mitigados
-    minSweepExtPct = 0,          // % mínimo de extensión del wick sobre el swing (0 = desactivado)
-    regimeFilter = false,        // Filtrar por régimen de mercado (solo operar en tendencia)
+    // Parámetros v2
+    obMinBodyRatio = 0.35,
+    requireFVG = false,
+    checkMitigation = true,
+    minSweepExtPct = 0,
+    regimeFilter = false,
+    // Parámetros v3: mejoras de win rate
+    requireCandleConfirmation = false, // vela de confirmación que cierre dentro del OB
+    htfEmaFilter = false,              // HTF EMA200: LONG sobre EMA, SHORT bajo EMA
+    useFVGasTP = false,                // usar FVG más cercano como TP en lugar de RR fijo
+    strictSessionWindows = false,      // solo London open 07-09 y NY open 13:30-15:30
+    requireVolumeConfirmation = false, // volumen de sweep > volumeMultiplier × media 20 velas
+    volumeMultiplier = 1.5,
+    minCandleGap = 0,                  // velas mínimas entre trades consecutivos
   } = params
 
-  // ── Régimen de mercado (calculado una vez al inicio) ───────────────────────
-  const regime = regimeFilter ? detectRegime(candles) : null
-
   const signals: Signal[] = []
-  const minPeriod = Math.max(swingLookback, obLookback) + 5
+  const minPeriod = Math.max(swingLookback, obLookback, 200) + 5
+  let lastSignalIndex = -Infinity  // para controlar minCandleGap
 
   for (let i = minPeriod; i < candles.length - 2; i++) {
     // ── Filtro de régimen de mercado ──────────────────────────────────────────
-    // Recalcular régimen local en ventana de 50 velas para adaptación dinámica
     if (regimeFilter && i % 50 === 0) {
       const localRegime = detectRegime(candles.slice(Math.max(0, i - 60), i + 1))
-      // En mercados ranging o muy volátiles, no operar
       if (localRegime.regime === 'volatile') continue
-      // Filtrar dirección: en trending_up solo LONG, en trending_down solo SHORT
-      // (esto se aplica más abajo al construir la señal)
     }
 
     // ── Filtro de sesión ──────────────────────────────────────────────────────
-    if (useLondonSession !== undefined || useNYSession !== undefined || useAsiaSession !== undefined) {
+    // strictSessionWindows toma precedencia sobre los filtros de sesión individuales
+    if (strictSessionWindows) {
+      const d = new Date(candles[i].timestamp)
+      if (!isStrictSessionWindow(d)) continue
+    } else if (useLondonSession !== undefined || useNYSession !== undefined || useAsiaSession !== undefined) {
       const d = new Date(candles[i].timestamp)
       const london = useLondonSession && isLondonSession(d)
       const ny     = useNYSession && isNYSession(d)
@@ -273,6 +353,10 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
       if (atr < atrMinThreshold) continue
     }
 
+    // ── HTF EMA200 bias filter ────────────────────────────────────────────────
+    // Computed once per candle for use in both setups below
+    const ema200 = htfEmaFilter ? getEMA(candles, 200, i) : 0
+
     // ── 1. Swing High/Low (ventana: swingLookback velas antes de i) ───────────
     let swingHigh = -Infinity
     let swingLow  = Infinity
@@ -286,6 +370,11 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
 
     const c = candles[i]
 
+    // ── Volume confirmation ───────────────────────────────────────────────────
+    // Pre-calculate whether sweep candle has sufficient volume
+    const sweepCandleVolume = c.volume
+    const avgVol20 = requireVolumeConfirmation ? getAvgVolume(candles, 20, i - 1) : 0
+
     // ── 2. Liquidity Sweep + CHoCH ────────────────────────────────────────────
 
     // SHORT SETUP: barrido alcista (wick sube sobre swingHigh y cierra debajo)
@@ -294,17 +383,27 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
       c.close < swingHigh &&
       i > swingHighIdx
     ) {
-      // Filtro de extensión mínima del sweep
+      // ── Filtro de gap mínimo entre trades ──────────────────────────────────
+      if (minCandleGap > 0 && i - lastSignalIndex < minCandleGap) continue
+
+      // ── Filtro de extensión mínima del sweep ───────────────────────────────
       if (minSweepExtPct > 0) {
         const extPct = (c.high - swingHigh) / swingHigh * 100
         if (extPct < minSweepExtPct) continue
       }
 
+      // ── Confirmación de volumen en vela de sweep ────────────────────────────
+      if (requireVolumeConfirmation && sweepCandleVolume !== undefined && avgVol20 > 0) {
+        if (sweepCandleVolume < avgVol20 * volumeMultiplier) continue
+      }
+
+      // ── HTF EMA200 filter: SHORT solo cuando precio bajo EMA200 ────────────
+      if (htfEmaFilter && c.close > ema200) continue
+
       // Buscar Order Block: última vela alcista antes del impulso bajista
       let obIndex = -1
       for (let k = i - 1; k >= Math.max(0, i - obLookback); k--) {
         if (candles[k].close > candles[k].open) {
-          // Filtro de calidad del OB
           if (obBodyRatio(candles[k]) >= obMinBodyRatio) {
             obIndex = k
             break
@@ -315,30 +414,54 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
 
       const ob = candles[obIndex]
 
-      // ── Mitigation check: OB no debe haber sido ya testeado
+      // ── Candle confirmation: siguiente vela debe cerrar dentro del OB ────────
+      // La vela i+1 debe cerrar entre ob.low y ob.high (retorno dentro del OB)
+      if (requireCandleConfirmation) {
+        const confirmIdx = i + 1
+        if (confirmIdx >= candles.length) continue
+        const confirmCandle = candles[confirmIdx]
+        // Para SHORT: la vela de confirmación debe ser bajista y cerrar por debajo de ob.high
+        if (confirmCandle.close >= ob.high || confirmCandle.close > confirmCandle.open) continue
+      }
+
+      // ── Mitigation check: OB no debe haber sido ya testeado ─────────────────
       if (checkMitigation && isOBMitigated(candles, obIndex, i, 'SHORT', ob.high, ob.low)) continue
 
-      // ── FVG confluence (opcional)
+      // ── FVG confluence (opcional) ────────────────────────────────────────────
       if (requireFVG && !hasFVG(candles, obIndex, i, 'SHORT')) continue
 
       const sl   = ob.high + slBuffer
       const risk = sl - ob.low
       if (risk <= 0) continue
 
-      const tp1 = ob.low - risk * (tp1RR ?? 1.5)
-      const tp2 = ob.low - risk * tp2RR
+      // ── TP: FVG fill o RR fijo ───────────────────────────────────────────────
+      let tp2: number
+      if (useFVGasTP) {
+        const fvgTP = findNearestFVGTarget(candles, i, 'SHORT', ob.low)
+        if (fvgTP !== null && (ob.low - fvgTP) / risk >= minRiskReward) {
+          tp2 = fvgTP
+        } else {
+          tp2 = ob.low - risk * tp2RR
+        }
+      } else {
+        tp2 = ob.low - risk * tp2RR
+      }
+
       const rr  = (ob.low - tp2) / risk
       if (rr < minRiskReward) continue
 
-      // Validar dirección con tendencia
+      // ── Validar dirección con tendencia (filtro EMA original) ─────────────
       if (trendFilter !== 'none') {
         const period = trendFilter === 'ema50' ? 50 : 200
         const ema = getEMA(candles, period, i)
-        if (ob.low > ema) continue  // OB por encima de EMA → skip SHORT
+        if (ob.low > ema) continue
       }
 
+      const entryIdx = requireCandleConfirmation ? i + 2 : i + 1
+      lastSignalIndex = entryIdx
+
       signals.push({
-        index: i + 1,
+        index: entryIdx,
         direction: 'SHORT',
         entry: ob.low,
         sl,
@@ -353,17 +476,27 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
       c.close > swingLow &&
       i > swingLowIdx
     ) {
-      // Filtro de extensión mínima del sweep
+      // ── Filtro de gap mínimo entre trades ──────────────────────────────────
+      if (minCandleGap > 0 && i - lastSignalIndex < minCandleGap) continue
+
+      // ── Filtro de extensión mínima del sweep ───────────────────────────────
       if (minSweepExtPct > 0) {
         const extPct = (swingLow - c.low) / swingLow * 100
         if (extPct < minSweepExtPct) continue
       }
 
+      // ── Confirmación de volumen en vela de sweep ────────────────────────────
+      if (requireVolumeConfirmation && sweepCandleVolume !== undefined && avgVol20 > 0) {
+        if (sweepCandleVolume < avgVol20 * volumeMultiplier) continue
+      }
+
+      // ── HTF EMA200 filter: LONG solo cuando precio sobre EMA200 ────────────
+      if (htfEmaFilter && c.close < ema200) continue
+
       // Buscar Order Block: última vela bajista antes del impulso alcista
       let obIndex = -1
       for (let k = i - 1; k >= Math.max(0, i - obLookback); k--) {
         if (candles[k].close < candles[k].open) {
-          // Filtro de calidad del OB
           if (obBodyRatio(candles[k]) >= obMinBodyRatio) {
             obIndex = k
             break
@@ -374,30 +507,54 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
 
       const ob = candles[obIndex]
 
-      // ── Mitigation check: OB no debe haber sido ya testeado
+      // ── Candle confirmation: siguiente vela debe cerrar dentro del OB ────────
+      // La vela i+1 debe ser alcista y cerrar por encima de ob.low
+      if (requireCandleConfirmation) {
+        const confirmIdx = i + 1
+        if (confirmIdx >= candles.length) continue
+        const confirmCandle = candles[confirmIdx]
+        // Para LONG: la vela de confirmación debe ser alcista y cerrar por encima de ob.low
+        if (confirmCandle.close <= ob.low || confirmCandle.close < confirmCandle.open) continue
+      }
+
+      // ── Mitigation check: OB no debe haber sido ya testeado ─────────────────
       if (checkMitigation && isOBMitigated(candles, obIndex, i, 'LONG', ob.high, ob.low)) continue
 
-      // ── FVG confluence (opcional)
+      // ── FVG confluence (opcional) ────────────────────────────────────────────
       if (requireFVG && !hasFVG(candles, obIndex, i, 'LONG')) continue
 
       const sl   = ob.low - slBuffer
       const risk = ob.high - sl
       if (risk <= 0) continue
 
-      const tp1 = ob.high + risk * (tp1RR ?? 1.5)
-      const tp2 = ob.high + risk * tp2RR
+      // ── TP: FVG fill o RR fijo ───────────────────────────────────────────────
+      let tp2: number
+      if (useFVGasTP) {
+        const fvgTP = findNearestFVGTarget(candles, i, 'LONG', ob.high)
+        if (fvgTP !== null && (fvgTP - ob.high) / risk >= minRiskReward) {
+          tp2 = fvgTP
+        } else {
+          tp2 = ob.high + risk * tp2RR
+        }
+      } else {
+        tp2 = ob.high + risk * tp2RR
+      }
+
       const rr  = (tp2 - ob.high) / risk
       if (rr < minRiskReward) continue
 
-      // Validar dirección con tendencia
+      // ── Validar dirección con tendencia (filtro EMA original) ─────────────
       if (trendFilter !== 'none') {
         const period = trendFilter === 'ema50' ? 50 : 200
         const ema = getEMA(candles, period, i)
-        if (ob.high < ema) continue  // OB por debajo de EMA → skip LONG
+        if (ob.high < ema) continue
       }
 
+      const entryIdx = requireCandleConfirmation ? i + 2 : i + 1
+      lastSignalIndex = entryIdx
+
       signals.push({
-        index: i + 1,
+        index: entryIdx,
         direction: 'LONG',
         entry: ob.high,
         sl,

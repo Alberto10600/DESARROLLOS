@@ -48,6 +48,15 @@ export interface StrategyParams {
 
   // ── Parámetros v2: régimen de mercado ────────────────────────────────────
   regimeFilter?: boolean       // solo operar en régimen trending (no ranging, no volatile)
+
+  // ── Parámetros v3: mejoras de win rate ───────────────────────────────────
+  requireCandleConfirmation?: boolean  // exigir que la vela de entrada cierre dentro del OB
+  htfEmaFilter?: boolean               // filtro HTF EMA200: LONG solo sobre EMA, SHORT solo bajo EMA
+  useFVGasTP?: boolean                 // usar el FVG más cercano como TP en vez de RR fijo
+  strictSessionWindows?: boolean       // solo operar en ventanas London open (07-09) y NY open (13:30-15:30)
+  requireVolumeConfirmation?: boolean  // exigir volumen de sweep > 1.5x media de 20 velas
+  volumeMultiplier?: number            // multiplicador de volumen requerido (default 1.5)
+  minCandleGap?: number                // mínimo de velas entre trades consecutivos (default 3)
 }
 
 // ─── Trade ────────────────────────────────────────────────────────────────────
