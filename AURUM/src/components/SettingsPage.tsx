@@ -87,7 +87,7 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <span className="text-xs text-slate-400">Capital inicial por defecto</span>
             <input type="number" value={config.capital} min={100} step={100}
-              onChange={e => setConfig({ capital: Number(e.target.value) })}}
+              onChange={e => setConfig({ capital: Number(e.target.value) })}
               className="w-28 bg-slate-800 text-slate-200 text-xs px-2 py-1 rounded border border-slate-700 text-right"
             />
           </div>
