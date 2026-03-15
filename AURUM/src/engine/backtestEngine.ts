@@ -357,3 +357,116 @@ function emptyMetrics(cap: number): BacktestMetrics {
     sharpeRatio: 0, calmarRatio: 0, byYear: {}, equityCurve: []
   }
 }
+
+// ─── Monte Carlo Analysis ──────────────────────────────────────────────────────
+
+export interface MonteCarloResult {
+  simulations: number
+  p5FinalEquity: number      // percentil 5 (peor caso realista)
+  p25FinalEquity: number
+  p50FinalEquity: number     // mediana
+  p75FinalEquity: number
+  p95FinalEquity: number     // mejor caso realista
+  p5MaxDrawdown: number      // percentil 95 del drawdown (peor)
+  p50MaxDrawdown: number
+  p5Return: number           // retorno en percentil 5
+  p50Return: number
+  p95Return: number
+  ruinProbability: number    // prob de perder > 50% del capital
+  bandUpper: number[]        // banda superior de equity (p75)
+  bandMedian: number[]       // mediana de equity
+  bandLower: number[]        // banda inferior de equity (p25)
+}
+
+/**
+ * Permuta aleatoriamente el orden de los trades N veces y mide la distribución
+ * de outcomes posibles. Mide robustez de la equity curve.
+ */
+export function runMonteCarlo(
+  trades: Trade[],
+  initialCapital: number,
+  simulations = 500
+): MonteCarloResult {
+  if (trades.length < 5) {
+    return {
+      simulations: 0,
+      p5FinalEquity: initialCapital, p25FinalEquity: initialCapital,
+      p50FinalEquity: initialCapital, p75FinalEquity: initialCapital,
+      p95FinalEquity: initialCapital, p5MaxDrawdown: 0, p50MaxDrawdown: 0,
+      p5Return: 0, p50Return: 0, p95Return: 0, ruinProbability: 0,
+      bandUpper: [], bandMedian: [], bandLower: [],
+    }
+  }
+
+  const pnls = trades.map(t => t.pnl)
+  const finalEquities: number[] = []
+  const maxDrawdowns: number[] = []
+
+  // Para las bandas: guardar curvas de equity normalizadas
+  const equityCurves: number[][] = []
+
+  for (let s = 0; s < simulations; s++) {
+    // Fisher-Yates shuffle de los P&Ls
+    const shuffled = [...pnls]
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+    }
+
+    // Simular equity curve
+    let eq = initialCapital
+    let peak = initialCapital
+    let maxDD = 0
+    const curve: number[] = [eq]
+
+    for (const pnl of shuffled) {
+      eq = Math.max(0.01, eq + pnl)
+      if (eq > peak) peak = eq
+      const dd = peak > 0 ? (peak - eq) / peak * 100 : 0
+      if (dd > maxDD) maxDD = dd
+      curve.push(eq)
+    }
+
+    finalEquities.push(eq)
+    maxDrawdowns.push(maxDD)
+    equityCurves.push(curve)
+  }
+
+  finalEquities.sort((a, b) => a - b)
+  maxDrawdowns.sort((a, b) => a - b)
+
+  const pct = (arr: number[], p: number) => arr[Math.floor(arr.length * p)]
+
+  // Bandas de equity (p25, p50, p75) sobre el tiempo
+  const steps = trades.length + 1
+  const bandUpper:  number[] = []
+  const bandMedian: number[] = []
+  const bandLower:  number[] = []
+
+  for (let t = 0; t < steps; t++) {
+    const vals = equityCurves.map(c => c[Math.min(t, c.length - 1)]).sort((a, b) => a - b)
+    bandUpper.push(pct(vals, 0.75))
+    bandMedian.push(pct(vals, 0.50))
+    bandLower.push(pct(vals, 0.25))
+  }
+
+  const ruinProbability = finalEquities.filter(e => e < initialCapital * 0.5).length / simulations * 100
+
+  return {
+    simulations,
+    p5FinalEquity:  pct(finalEquities, 0.05),
+    p25FinalEquity: pct(finalEquities, 0.25),
+    p50FinalEquity: pct(finalEquities, 0.50),
+    p75FinalEquity: pct(finalEquities, 0.75),
+    p95FinalEquity: pct(finalEquities, 0.95),
+    p5MaxDrawdown:  pct(maxDrawdowns, 0.95),  // peor drawdown
+    p50MaxDrawdown: pct(maxDrawdowns, 0.50),
+    p5Return:  (pct(finalEquities, 0.05) / initialCapital - 1) * 100,
+    p50Return: (pct(finalEquities, 0.50) / initialCapital - 1) * 100,
+    p95Return: (pct(finalEquities, 0.95) / initialCapital - 1) * 100,
+    ruinProbability,
+    bandUpper,
+    bandMedian,
+    bandLower,
+  }
+}

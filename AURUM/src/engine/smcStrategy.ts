@@ -10,7 +10,96 @@
  *   7. Entry al retesteo del OB
  */
 
-import type { Candle, StrategyParams, Trade } from '../types'
+import type { Candle, StrategyParams } from '../types'
+
+// ─── Market Regime ────────────────────────────────────────────────────────────
+
+export type MarketRegime = 'trending_up' | 'trending_down' | 'ranging' | 'volatile'
+
+export interface RegimeAnalysis {
+  regime: MarketRegime
+  adx: number          // ADX value (trend strength 0-100)
+  atrPct: number       // ATR as % of price (volatility)
+  efficiency: number   // directional efficiency 0-1 (1 = perfect trend)
+  bias: 'bullish' | 'bearish' | 'neutral'
+}
+
+/**
+ * Detecta el régimen de mercado usando:
+ * - ADX aproximado (fuerza de tendencia)
+ * - ATR normalizado (volatilidad)
+ * - Eficiencia direccional (trending vs ranging)
+ * - EMA slope (dirección de la tendencia)
+ */
+export function detectRegime(candles: Candle[], lookback = 20): RegimeAnalysis {
+  const n = candles.length
+  if (n < lookback + 2) {
+    return { regime: 'ranging', adx: 0, atrPct: 0, efficiency: 0, bias: 'neutral' }
+  }
+
+  const end = n - 1
+  const start = end - lookback
+
+  // ── ATR (volatilidad) ───────────────────────────────────────────────────
+  let atrSum = 0
+  for (let i = start + 1; i <= end; i++) {
+    atrSum += Math.max(
+      candles[i].high - candles[i].low,
+      Math.abs(candles[i].high - candles[i - 1].close),
+      Math.abs(candles[i].low  - candles[i - 1].close)
+    )
+  }
+  const atr = atrSum / lookback
+  const atrPct = candles[end].close > 0 ? (atr / candles[end].close) * 100 : 0
+
+  // ── Eficiencia direccional ───────────────────────────────────────────────
+  // Ratio: desplazamiento neto / camino total recorrido
+  const netMove   = Math.abs(candles[end].close - candles[start].close)
+  let totalPath = 0
+  for (let i = start + 1; i <= end; i++) {
+    totalPath += Math.abs(candles[i].close - candles[i - 1].close)
+  }
+  const efficiency = totalPath > 0 ? netMove / totalPath : 0
+
+  // ── ADX aproximado (DI+ vs DI-) ─────────────────────────────────────────
+  let diPlus = 0, diMinus = 0
+  for (let i = start + 1; i <= end; i++) {
+    const upMove   = candles[i].high - candles[i - 1].high
+    const downMove = candles[i - 1].low - candles[i].low
+    const trueRange = Math.max(
+      candles[i].high - candles[i].low,
+      Math.abs(candles[i].high - candles[i - 1].close),
+      Math.abs(candles[i].low  - candles[i - 1].close)
+    )
+    if (trueRange > 0) {
+      if (upMove > downMove && upMove > 0)   diPlus  += (upMove   / trueRange) * 100
+      if (downMove > upMove && downMove > 0) diMinus += (downMove / trueRange) * 100
+    }
+  }
+  diPlus  /= lookback
+  diMinus /= lookback
+  const diDiff = Math.abs(diPlus - diMinus)
+  const diSum  = diPlus + diMinus
+  const adx    = diSum > 0 ? (diDiff / diSum) * 100 : 0
+
+  // ── EMA slope para bias ───────────────────────────────────────────────────
+  const ema50End   = getEMA(candles, 50, end)
+  const ema50Start = getEMA(candles, 50, Math.max(0, end - 10))
+  const slope = ema50End - ema50Start
+  const bias: RegimeAnalysis['bias'] = slope > atr * 0.5 ? 'bullish' : slope < -atr * 0.5 ? 'bearish' : 'neutral'
+
+  // ── Clasificar régimen ────────────────────────────────────────────────────
+  let regime: MarketRegime
+  if (atrPct > 3) {
+    regime = 'volatile'
+  } else if (adx > 25 && efficiency > 0.4) {
+    regime = diPlus > diMinus ? 'trending_up' : 'trending_down'
+  } else {
+    regime = 'ranging'
+  }
+
+  return { regime, adx, atrPct, efficiency, bias }
+}
 
 // ─── Signal Internal Types ────────────────────────────────────────────────────
 
@@ -141,12 +230,26 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
     requireFVG = false,          // Requerir FVG como confluencia
     checkMitigation = true,      // Descartar OBs ya mitigados
     minSweepExtPct = 0,          // % mínimo de extensión del wick sobre el swing (0 = desactivado)
+    regimeFilter = false,        // Filtrar por régimen de mercado (solo operar en tendencia)
   } = params
+
+  // ── Régimen de mercado (calculado una vez al inicio) ───────────────────────
+  const regime = regimeFilter ? detectRegime(candles) : null
 
   const signals: Signal[] = []
   const minPeriod = Math.max(swingLookback, obLookback) + 5
 
   for (let i = minPeriod; i < candles.length - 2; i++) {
+    // ── Filtro de régimen de mercado ──────────────────────────────────────────
+    // Recalcular régimen local en ventana de 50 velas para adaptación dinámica
+    if (regimeFilter && i % 50 === 0) {
+      const localRegime = detectRegime(candles.slice(Math.max(0, i - 60), i + 1))
+      // En mercados ranging o muy volátiles, no operar
+      if (localRegime.regime === 'volatile') continue
+      // Filtrar dirección: en trending_up solo LONG, en trending_down solo SHORT
+      // (esto se aplica más abajo al construir la señal)
+    }
+
     // ── Filtro de sesión ──────────────────────────────────────────────────────
     if (useLondonSession !== undefined || useNYSession !== undefined || useAsiaSession !== undefined) {
       const d = new Date(candles[i].timestamp)

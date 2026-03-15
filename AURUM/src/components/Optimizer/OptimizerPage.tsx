@@ -4,6 +4,8 @@ import { ConvergenceChart } from './ConvergenceChart'
 import { ScatterPlot } from './ScatterPlot'
 import { BayesianOptimizer } from '../../engine/bayesian/optimizer'
 import { runBacktest, calcScore } from '../../engine/backtestEngine'
+import { runWalkForward } from '../../engine/walkForward'
+import type { WFAResult, WFAProgress, WFAOptions } from '../../engine/walkForward'
 import type {
   BayesianState,
   BayesianOptions,
@@ -13,7 +15,7 @@ import type {
   StrategyParams,
 } from '../../types'
 
-type OptMethod = 'grid' | 'bayesian' | 'compare'
+type OptMethod = 'grid' | 'bayesian' | 'wfa' | 'compare'
 
 const DEFAULT_GRID: GridParams = {
   swingLookback: [8, 12, 15],
@@ -120,6 +122,18 @@ export function OptimizerPage() {
   const [scatterX, setScatterX] = useState('swingLookback')
   const [scatterY, setScatterY] = useState('tp2RR')
   const [startTime, setStartTime] = useState(0)
+
+  // WFA state
+  const [wfaResult, setWfaResult] = useState<WFAResult | null>(null)
+  const [wfaProgress, setWfaProgress] = useState<WFAProgress | null>(null)
+  const [wfaRunning, setWfaRunning] = useState(false)
+  const [wfaOptions, setWfaOptions] = useState<WFAOptions>({
+    trainPct: 0.70,
+    stepPct: 0.10,
+    minWindowCandles: 100,
+    capital: 5000,
+  })
+  const wfaCancelRef = useRef(false)
 
   // Refs to cancel in-progress async runs
   const gridCancelRef  = useRef(false)
@@ -253,6 +267,40 @@ export function OptimizerPage() {
     setBayesianState(prev => prev ? { ...prev, isRunning: false } : null)
   }, [setBayesianState])
 
+  // ─── Walk-Forward Analysis ─────────────────────────────────────────────────
+  const runWFA = useCallback(async () => {
+    if (!candles.length) return alert('Carga datos primero (ve a Backtesting)')
+    if (candles.length < 400) return alert('WFA necesita al menos 400 velas para ser significativo')
+
+    wfaCancelRef.current = false
+    setWfaRunning(true)
+    setWfaResult(null)
+    setWfaProgress(null)
+
+    const opts: WFAOptions = { ...wfaOptions, capital: config.capital }
+
+    try {
+      const result = await runWalkForward(
+        candles,
+        useAppStore.getState().strategyParams,
+        opts,
+        (p) => setWfaProgress({ ...p }),
+        wfaCancelRef
+      )
+      setWfaResult(result)
+    } catch (err) {
+      console.error('[WFA] Error:', err)
+      alert(String(err))
+    } finally {
+      setWfaRunning(false)
+    }
+  }, [candles, config.capital, wfaOptions])
+
+  const stopWFA = useCallback(() => {
+    wfaCancelRef.current = true
+    setWfaRunning(false)
+  }, [])
+
   // ─── Aplicar mejores parámetros ─────────────────────────────────────────────
   const applyBest = (params: typeof gridResults[0]['params']) => {
     setStrategyParams(params)
@@ -263,7 +311,7 @@ export function OptimizerPage() {
   const gridBest  = gridResults[0]
   const bayesBest = bayesianState?.bestObservation
 
-  const isRunning = (method === 'grid' && isGridRunning) || (method === 'bayesian' && bayesianState?.isRunning)
+  const isRunning = (method === 'grid' && isGridRunning) || (method === 'bayesian' && bayesianState?.isRunning) || (method === 'wfa' && wfaRunning)
 
   const totalIter = bayesOptions.nInitial + bayesOptions.nIterations
   const bayesProgress = bayesianState ? (bayesianState.iteration / totalIter) * 100 : 0
@@ -279,7 +327,7 @@ export function OptimizerPage() {
       {/* ── Selector de método ────────────────────────────────────────────── */}
       <div className="flex items-center gap-2">
         <span className="text-xs text-slate-500 mr-2">MÉTODO:</span>
-        {(['grid', 'bayesian', 'compare'] as OptMethod[]).map(m => (
+        {(['grid', 'bayesian', 'wfa', 'compare'] as OptMethod[]).map(m => (
           <button
             key={m}
             onClick={() => setMethod(m)}
@@ -289,7 +337,7 @@ export function OptimizerPage() {
                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
             }`}
           >
-            {m === 'grid' ? '⊞ Grid Search' : m === 'bayesian' ? '⚡ Bayesian' : '⇄ Comparar'}
+            {m === 'grid' ? '⊞ Grid' : m === 'bayesian' ? '⚡ Bayesian' : m === 'wfa' ? '🔄 Walk-Forward' : '⇄ Comparar'}
           </button>
         ))}
         <span className="ml-auto text-xs text-slate-600">
@@ -423,18 +471,82 @@ export function OptimizerPage() {
             </div>
           )}
 
+          {/* Config WFA */}
+          {method === 'wfa' && (
+            <div className="bg-[#070d1a] border border-slate-800 rounded-lg p-4">
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🔄 Walk-Forward Analysis</h3>
+              <p className="text-[10px] text-slate-600 mb-3">
+                Divide los datos en ventanas IS/OOS para medir robustez real y detectar overfitting.
+              </p>
+              <div className="space-y-2 mb-4">
+                <Slider label="Train %" value={Math.round(wfaOptions.trainPct * 100)} min={50} max={80} step={5}
+                  unit="%" onChange={v => setWfaOptions(o => ({ ...o, trainPct: v / 100 }))} />
+                <Slider label="Paso ventana" value={Math.round(wfaOptions.stepPct * 100)} min={5} max={25} step={5}
+                  unit="%" onChange={v => setWfaOptions(o => ({ ...o, stepPct: v / 100 }))} />
+              </div>
+              {wfaProgress && wfaRunning && (
+                <div className="mb-3">
+                  <div className="flex justify-between text-xs text-slate-500 mb-1">
+                    <span>Ventana {wfaProgress.currentWindow}/{wfaProgress.totalWindows}</span>
+                    <span className="text-amber-400">{wfaProgress.phase === 'training' ? 'IS' : 'OOS'}</span>
+                  </div>
+                  <div className="h-1.5 bg-slate-800 rounded-full">
+                    <div className="h-full bg-amber-500 rounded-full transition-all"
+                      style={{ width: `${(wfaProgress.currentWindow / wfaProgress.totalWindows) * 100}%` }} />
+                  </div>
+                </div>
+              )}
+              <button
+                onClick={wfaRunning ? stopWFA : runWFA}
+                className={`w-full py-2 text-xs font-bold rounded transition-colors ${
+                  wfaRunning ? 'bg-red-600 hover:bg-red-500 text-white' : 'bg-amber-500 hover:bg-amber-400 text-black'
+                }`}
+              >
+                {wfaRunning ? '■ DETENER WFA' : '🔄 INICIAR WALK-FORWARD'}
+              </button>
+            </div>
+          )}
+
           {/* Mejor resultado */}
           <div className="bg-[#070d1a] border border-amber-500/20 rounded-lg p-4">
             <h3 className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-3">
-              {method === 'grid' ? '⊞ MEJOR (GRID)' : '⚡ MEJOR (BAYESIAN)'}
+              {method === 'grid' ? '⊞ MEJOR (GRID)' : method === 'wfa' ? '🔄 MEJOR (WFA OOS)' : '⚡ MEJOR (BAYESIAN)'}
             </h3>
-            <BestParamsCard
-              obs={method === 'grid' ? gridBest : bayesBest}
-              onApply={() => {
-                const best = method === 'grid' ? gridBest : bayesBest
-                if (best) applyBest(best.params)
-              }}
-            />
+            {method === 'wfa' && wfaResult ? (
+              <div className="space-y-1 text-xs font-mono">
+                <div className={`text-center py-2 rounded mb-2 font-bold ${wfaResult.isRobust ? 'bg-emerald-900/30 text-emerald-400' : 'bg-red-900/30 text-red-400'}`}>
+                  {wfaResult.isRobust ? '✓ ESTRATEGIA ROBUSTA' : '✗ POSIBLE OVERFITTING'}
+                </div>
+                {[
+                  ['Consistencia IS→OOS', `${(wfaResult.consistency * 100).toFixed(1)}%`],
+                  ['Degradación', `-${(wfaResult.degradation * 100).toFixed(1)}%`],
+                  ['Win Rate OOS', `${wfaResult.summary.avgOosWinRate.toFixed(1)}%`],
+                  ['PF OOS', wfaResult.summary.avgOosProfitFactor.toFixed(2)],
+                  ['Max DD OOS', `-${wfaResult.summary.avgOosMaxDD.toFixed(1)}%`],
+                  ['Sharpe OOS', wfaResult.summary.avgOosSharpe.toFixed(2)],
+                  ['Ventanas +', `${wfaResult.summary.positiveWindows}/${wfaResult.summary.totalWindows}`],
+                ].map(([k, v]) => (
+                  <div key={k} className="flex justify-between">
+                    <span className="text-slate-500">{k}</span>
+                    <span className="text-amber-400">{v}</span>
+                  </div>
+                ))}
+                <button
+                  onClick={() => { setStrategyParams(wfaResult.bestOosParams); setPage('backtesting') }}
+                  className="w-full mt-2 py-2 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded"
+                >
+                  ▶ APLICAR MEJOR OOS
+                </button>
+              </div>
+            ) : (
+              <BestParamsCard
+                obs={method === 'grid' ? gridBest : bayesBest}
+                onApply={() => {
+                  const best = method === 'grid' ? gridBest : bayesBest
+                  if (best) applyBest(best.params)
+                }}
+              />
+            )}
           </div>
         </div>
 
@@ -494,6 +606,55 @@ export function OptimizerPage() {
               )}
             </div>
           </div>
+
+          {/* Walk-Forward: tabla de ventanas */}
+          {method === 'wfa' && wfaResult && wfaResult.windows.length > 0 && (
+            <div className="flex-1 bg-[#070d1a] border border-slate-800 rounded-lg overflow-hidden min-h-0">
+              <div className="p-3 border-b border-slate-800">
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  Ventanas Walk-Forward ({wfaResult.windows.length})
+                </h3>
+              </div>
+              <div className="overflow-auto h-full">
+                <table className="w-full text-xs font-mono">
+                  <thead className="sticky top-0 bg-[#070d1a]">
+                    <tr className="text-slate-600 border-b border-slate-800">
+                      {['#','IS desde','IS hasta','OOS desde','OOS hasta','IS Score','OOS Score','Consist.','WR OOS','PF OOS','DD OOS','Retorno OOS'].map(h =>
+                        <th key={h} className="text-right py-2 px-2 first:text-left whitespace-nowrap">{h}</th>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {wfaResult.windows.map((w, i) => {
+                      const good = w.consistency >= 0.5 && w.oosMetrics.totalReturn > 0
+                      return (
+                        <tr key={i} className={`border-b border-slate-800/30 ${good ? '' : 'opacity-70'}`}>
+                          <td className="py-1.5 px-2 text-slate-500">{i + 1}</td>
+                          <td className="py-1.5 px-2 text-right text-slate-500">{w.isCandlesFrom}</td>
+                          <td className="py-1.5 px-2 text-right text-slate-500">{w.isCandlesTo}</td>
+                          <td className="py-1.5 px-2 text-right text-amber-400/70">{w.oosCandlesFrom}</td>
+                          <td className="py-1.5 px-2 text-right text-amber-400/70">{w.oosCandlesTo}</td>
+                          <td className="py-1.5 px-2 text-right text-slate-400">{w.isScore.toFixed(3)}</td>
+                          <td className={`py-1.5 px-2 text-right font-bold ${w.oosScore > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {w.oosScore.toFixed(3)}
+                          </td>
+                          <td className={`py-1.5 px-2 text-right ${w.consistency >= 0.5 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {(w.consistency * 100).toFixed(0)}%
+                          </td>
+                          <td className="py-1.5 px-2 text-right text-slate-400">{w.oosMetrics.winRate.toFixed(1)}%</td>
+                          <td className="py-1.5 px-2 text-right text-slate-400">{w.oosMetrics.profitFactor.toFixed(2)}</td>
+                          <td className="py-1.5 px-2 text-right text-red-400">-{w.oosMetrics.maxDrawdown.toFixed(1)}%</td>
+                          <td className={`py-1.5 px-2 text-right font-bold ${w.oosMetrics.totalReturn > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {w.oosMetrics.totalReturn > 0 ? '+' : ''}{w.oosMetrics.totalReturn.toFixed(1)}%
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* Comparativa Grid vs Bayesian */}
           {method === 'compare' && gridBest && bayesBest && (

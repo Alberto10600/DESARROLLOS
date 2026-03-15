@@ -5,11 +5,13 @@ import { TradesTable } from './panels/TradesTable'
 import { EquityChart } from './charts/EquityChart'
 import { DrawdownChart } from './charts/DrawdownChart'
 import { YearlyBars } from './charts/YearlyBars'
+import { MonthlyReturns } from './charts/MonthlyReturns'
+import { MonteCarloPanel } from './charts/MonteCarloPanel'
 import { Slider } from './ui/Slider'
 import { fetchCandles } from '../services/twelveData'
 import { runBacktest } from '../engine/backtestEngine'
 
-type Tab = 'equity' | 'drawdown' | 'yearly' | 'trades'
+type Tab = 'equity' | 'drawdown' | 'yearly' | 'monthly' | 'montecarlo' | 'trades'
 
 const POPULAR_SYMBOLS = ['XAU/USD', 'BTC/USD', 'EUR/USD', 'NAS100', 'SPY', 'ETH/USD', 'AAPL', 'TSLA'] as const
 
@@ -19,6 +21,26 @@ const INTERVALS: { label: string; value: string }[] = [
   { label: '1H',   value: '1h'    },
   { label: '30M',  value: '30min' },
 ]
+
+// ── Toggle button ────────────────────────────────────────────────────────────
+function Toggle({ label, value, onChange, tooltip }: {
+  label: string; value: boolean; onChange: (v: boolean) => void; tooltip?: string
+}) {
+  return (
+    <div className="flex items-center gap-2" title={tooltip}>
+      <span className="text-xs text-slate-500 w-28 shrink-0">{label}</span>
+      <button
+        onClick={() => onChange(!value)}
+        className={`relative w-9 h-5 rounded-full transition-colors ${value ? 'bg-amber-500' : 'bg-slate-700'}`}
+      >
+        <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${value ? 'left-4' : 'left-0.5'}`} />
+      </button>
+      <span className={`text-[10px] font-mono ${value ? 'text-amber-400' : 'text-slate-600'}`}>
+        {value ? 'ON' : 'OFF'}
+      </span>
+    </div>
+  )
+}
 
 export function BacktestPage() {
   const {
@@ -33,6 +55,7 @@ export function BacktestPage() {
   const [dataSource, setDataSource] = useState<'live' | 'cache' | 'demo' | null>(null)
   const [customSymbol, setCustomSymbol] = useState('')
   const [startDate, setStartDate] = useState('2019-01-01')
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   const handleFetchData = async () => {
     setLoadingCandles(true)
@@ -83,7 +106,6 @@ export function BacktestPage() {
     }
   }
 
-  // Candle date range for status badge
   const candleDateRange = candles.length > 0
     ? `${candles[0].date.slice(0, 10)} → ${candles[candles.length - 1].date.slice(0, 10)}`
     : null
@@ -94,7 +116,7 @@ export function BacktestPage() {
     <div className="flex flex-col h-full overflow-hidden p-4 gap-4">
 
       {/* ── Controles ───────────────────────────────────────────────────────── */}
-      <div className="bg-[#070d1a] border border-slate-800 rounded-lg p-4">
+      <div className="bg-[#070d1a] border border-slate-800 rounded-lg p-4 space-y-3">
         <div className="grid grid-cols-2 gap-x-8 gap-y-3">
 
           {/* Symbol chips */}
@@ -158,7 +180,7 @@ export function BacktestPage() {
             />
           </div>
 
-          {/* Start date */}
+          {/* Start date + data fetch */}
           <div className="flex items-center gap-3">
             <label className="text-xs text-slate-500">Desde</label>
             <input
@@ -175,7 +197,6 @@ export function BacktestPage() {
               {isLoadingCandles ? '⟳ Cargando…' : '⬇ Cargar datos'}
             </button>
 
-            {/* Data status badge */}
             {candles.length > 0 ? (
               <div className={`flex items-center gap-2 px-2 py-0.5 rounded text-[10px] font-mono border ${
                 dataSource === 'cache' ? 'bg-slate-700/50 text-slate-400 border-slate-600' :
@@ -196,7 +217,7 @@ export function BacktestPage() {
             )}
           </div>
 
-          {/* Sliders */}
+          {/* ── Parámetros base ────────────────────────────────────────────── */}
           <Slider label="Risk %" value={strategyParams.riskPct} min={0.5} max={3} step={0.1} decimals={1} unit="%"
             onChange={v => setStrategyParams({ riskPct: v })} />
           <Slider label="Swing LB" value={strategyParams.swingLookback} min={5} max={25}
@@ -209,24 +230,110 @@ export function BacktestPage() {
             onChange={v => setStrategyParams({ tp2RR: v })} />
           <Slider label="SL Buffer" value={strategyParams.slBuffer} min={0.2} max={3} step={0.1} decimals={1}
             onChange={v => setStrategyParams({ slBuffer: v })} />
+        </div>
 
-          {/* Acciones */}
-          <div className="col-span-2 flex gap-3 pt-2">
-            {candleError && <p className="text-xs text-red-400 mr-auto">{candleError}</p>}
-            <button
-              onClick={handleRunBacktest}
-              disabled={isRunningBacktest}
-              className="px-6 py-2 bg-amber-500 hover:bg-amber-400 text-black text-sm font-bold rounded transition-colors disabled:opacity-50 ml-auto"
-            >
-              {isRunningBacktest ? '⟳ Calculando…' : '▶ RUN BACKTEST'}
-            </button>
-            <button
-              onClick={() => setPage('optimizer')}
-              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm rounded transition-colors"
-            >
-              ⚡ OPTIMIZAR
-            </button>
-          </div>
+        {/* ── Parámetros avanzados v2 ─────────────────────────────────────── */}
+        <div>
+          <button
+            onClick={() => setShowAdvanced(v => !v)}
+            className="flex items-center gap-2 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+          >
+            <span className={`transition-transform ${showAdvanced ? 'rotate-90' : ''}`}>▶</span>
+            Filtros avanzados SMC v2
+            {showAdvanced && (
+              <span className="ml-2 px-1.5 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] rounded">
+                {[
+                  strategyParams.checkMitigation !== false && 'Mitigation',
+                  strategyParams.breakEven && 'BreakEven',
+                  strategyParams.requireFVG && 'FVG',
+                ].filter(Boolean).join(' · ') || 'defaults'}
+              </span>
+            )}
+          </button>
+
+          {showAdvanced && (
+            <div className="mt-3 pt-3 border-t border-slate-800 grid grid-cols-2 gap-x-8 gap-y-3">
+              {/* OB Body Ratio */}
+              <Slider
+                label="OB Body Ratio"
+                value={strategyParams.obMinBodyRatio ?? 0.35}
+                min={0} max={0.8} step={0.05} decimals={2}
+                onChange={v => setStrategyParams({ obMinBodyRatio: v })}
+              />
+
+              {/* Min Sweep Extension */}
+              <Slider
+                label="Sweep Ext %"
+                value={strategyParams.minSweepExtPct ?? 0}
+                min={0} max={0.5} step={0.05} decimals={2} unit="%"
+                onChange={v => setStrategyParams({ minSweepExtPct: v })}
+              />
+
+              {/* Toggles */}
+              <Toggle
+                label="Mitigation Check"
+                value={strategyParams.checkMitigation !== false}
+                onChange={v => setStrategyParams({ checkMitigation: v })}
+                tooltip="Descarta Order Blocks que ya fueron testeados antes del sweep"
+              />
+              <Toggle
+                label="Break-Even"
+                value={strategyParams.breakEven ?? false}
+                onChange={v => setStrategyParams({ breakEven: v })}
+                tooltip="Mueve el SL a entry cuando se alcanza TP1"
+              />
+              <Toggle
+                label="Require FVG"
+                value={strategyParams.requireFVG ?? false}
+                onChange={v => setStrategyParams({ requireFVG: v })}
+                tooltip="Requiere un Fair Value Gap entre el OB y el sweep como confluencia"
+              />
+              <Toggle
+                label="Regime Filter"
+                value={strategyParams.regimeFilter ?? false}
+                onChange={v => setStrategyParams({ regimeFilter: v })}
+                tooltip="Solo opera en regímenes trending, evita mercados ranging y volátiles"
+              />
+
+              {/* Trend filter */}
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-slate-500 w-28 shrink-0">Trend Filter</span>
+                <div className="flex rounded overflow-hidden border border-slate-700">
+                  {(['none', 'ema50', 'ema200'] as const).map(tf => (
+                    <button
+                      key={tf}
+                      onClick={() => setStrategyParams({ trendFilter: tf })}
+                      className={`px-2.5 py-1 text-xs font-mono transition-colors ${
+                        (strategyParams.trendFilter ?? 'none') === tf
+                          ? 'bg-amber-500/20 text-amber-300'
+                          : 'bg-slate-800 text-slate-500 hover:text-slate-300'
+                      }`}
+                    >
+                      {tf === 'none' ? 'OFF' : tf.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Acciones ────────────────────────────────────────────────────── */}
+        <div className="flex gap-3 pt-1">
+          {candleError && <p className="text-xs text-red-400 mr-auto">{candleError}</p>}
+          <button
+            onClick={handleRunBacktest}
+            disabled={isRunningBacktest}
+            className="px-6 py-2 bg-amber-500 hover:bg-amber-400 text-black text-sm font-bold rounded transition-colors disabled:opacity-50 ml-auto"
+          >
+            {isRunningBacktest ? '⟳ Calculando…' : '▶ RUN BACKTEST'}
+          </button>
+          <button
+            onClick={() => setPage('optimizer')}
+            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm rounded transition-colors"
+          >
+            ⚡ OPTIMIZAR
+          </button>
         </div>
       </div>
 
@@ -241,7 +348,9 @@ export function BacktestPage() {
               ['equity',   '📈 Equity'],
               ['drawdown', '📉 Drawdown'],
               ['yearly',   '📅 Año'],
-              ['trades',   '📋 Trades'],
+              ['monthly',     '🗓 Mensual'],
+              ['montecarlo',  '🎲 Monte Carlo'],
+              ['trades',      '📋 Trades'],
             ] as [Tab, string][]).map(([id, label]) => (
               <button
                 key={id}
@@ -257,7 +366,6 @@ export function BacktestPage() {
             ))}
           </div>
 
-          {/* Chart area */}
           <div className="flex-1 bg-[#070d1a] border border-slate-800 rounded-lg overflow-hidden min-h-0">
             {tab === 'equity' && (
               <EquityChart data={metrics.equityCurve} initialCapital={config.capital} />
@@ -267,6 +375,12 @@ export function BacktestPage() {
             )}
             {tab === 'yearly' && (
               <YearlyBars byYear={metrics.byYear} />
+            )}
+            {tab === 'monthly' && backtestResult && (
+              <MonthlyReturns trades={backtestResult.trades} initialCapital={config.capital} />
+            )}
+            {tab === 'montecarlo' && backtestResult && (
+              <MonteCarloPanel trades={backtestResult.trades} initialCapital={config.capital} />
             )}
             {tab === 'trades' && backtestResult && (
               <TradesTable trades={backtestResult.trades} />

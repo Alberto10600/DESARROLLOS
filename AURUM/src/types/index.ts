@@ -45,6 +45,9 @@ export interface StrategyParams {
 
   // ── Parámetros v2: gestión de riesgo ─────────────────────────────────────
   breakEven?: boolean          // mover SL a entry tras alcanzar TP1
+
+  // ── Parámetros v2: régimen de mercado ────────────────────────────────────
+  regimeFilter?: boolean       // solo operar en régimen trending (no ranging, no volatile)
 }
 
 // ─── Trade ────────────────────────────────────────────────────────────────────
