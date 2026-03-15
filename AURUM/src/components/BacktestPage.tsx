@@ -52,10 +52,94 @@ export function BacktestPage() {
   } = useAppStore()
 
   const [tab, setTab] = useState<Tab>('equity')
-  const [dataSource, setDataSource] = useState<'live' | 'cache' | 'demo' | null>(null)
+  const [dataSource, setDataSource] = useState<'live' | 'cache' | 'demo' | 'csv' | null>(null)
   const [customSymbol, setCustomSymbol] = useState('')
   const [startDate, setStartDate] = useState('2019-01-01')
   const [showAdvanced, setShowAdvanced] = useState(false)
+
+  const handleImportCSV = () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.csv,.txt'
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      try {
+        const text = await file.text()
+        const lines = text.trim().split('\n').filter(l => l.trim() && !l.startsWith('#'))
+        if (lines.length < 2) throw new Error('El CSV está vacío o no tiene datos')
+
+        // Detect separator
+        const sep = lines[0].includes(';') ? ';' : ','
+        const headers = lines[0].split(sep).map(h => h.trim().toLowerCase().replace(/[^a-z0-9]/g, ''))
+
+        // Map columns (supports TradingView, Yahoo Finance, MT4/MT5 exports)
+        const colMap: Record<string, number> = {}
+        const aliases: Record<string, string[]> = {
+          date:   ['time', 'date', 'datetime', 'timestamp'],
+          open:   ['open'],
+          high:   ['high'],
+          low:    ['low'],
+          close:  ['close', 'price'],
+          volume: ['volume', 'vol'],
+        }
+        for (const [field, names] of Object.entries(aliases)) {
+          for (const name of names) {
+            const idx = headers.findIndex(h => h.includes(name))
+            if (idx >= 0) { colMap[field] = idx; break }
+          }
+        }
+        if (!('date' in colMap) || !('close' in colMap)) {
+          throw new Error(`Columnas no reconocidas: ${headers.join(', ')}. Se necesita al menos "date" y "close".`)
+        }
+
+        const candles = lines.slice(1).map((line, i) => {
+          const cells = line.split(sep).map(c => c.trim().replace(/"/g, ''))
+          const raw = cells[colMap.date] ?? ''
+          // Parse timestamp (unix ms/s) or date string
+          let ts = Number(raw)
+          let dateStr: string
+          if (!isNaN(ts) && ts > 1e9) {
+            // Unix timestamp
+            if (ts > 1e12) ts = ts          // already ms
+            else ts = ts * 1000              // convert s→ms
+            dateStr = new Date(ts).toISOString().slice(0, 10)
+          } else {
+            // Date string like "2024-01-15" or "2024-01-15 09:00:00"
+            dateStr = raw.slice(0, 10)
+            ts = new Date(dateStr).getTime()
+          }
+          const o = parseFloat(cells[colMap.open  ?? colMap.close])
+          const h = parseFloat(cells[colMap.high  ?? colMap.close])
+          const l = parseFloat(cells[colMap.low   ?? colMap.close])
+          const c = parseFloat(cells[colMap.close])
+          if (isNaN(c) || isNaN(ts)) return null
+          return {
+            date: dateStr,
+            timestamp: ts,
+            open:   isNaN(o) ? c : o,
+            high:   isNaN(h) ? c : h,
+            low:    isNaN(l) ? c : l,
+            close:  c,
+            volume: colMap.volume != null ? parseFloat(cells[colMap.volume]) || 0 : 0,
+          }
+        }).filter((c): c is NonNullable<typeof c> => c !== null)
+
+        if (candles.length < 10) throw new Error('Se necesitan al menos 10 velas válidas')
+
+        candles.sort((a, b) => a.timestamp - b.timestamp)
+
+        const symbol = file.name.replace(/\.(csv|txt)$/i, '').toUpperCase().slice(0, 20)
+        setConfig({ symbol })
+        setCandles(candles)
+        setDataSource('csv')
+        setCandleError(null)
+      } catch (e: unknown) {
+        setCandleError(String(e))
+      }
+    }
+    input.click()
+  }
 
   const handleFetchData = async () => {
     setLoadingCandles(true)
@@ -196,16 +280,25 @@ export function BacktestPage() {
             >
               {isLoadingCandles ? '⟳ Cargando…' : '⬇ Cargar datos'}
             </button>
+            <button
+              onClick={handleImportCSV}
+              title="Importar CSV (TradingView, Yahoo Finance, MT4/MT5)"
+              className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs rounded transition-colors"
+            >
+              📂 CSV
+            </button>
 
             {candles.length > 0 ? (
               <div className={`flex items-center gap-2 px-2 py-0.5 rounded text-[10px] font-mono border ${
                 dataSource === 'cache' ? 'bg-slate-700/50 text-slate-400 border-slate-600' :
                 dataSource === 'demo'  ? 'bg-amber-900/30 text-amber-400 border-amber-800/50' :
+                dataSource === 'csv'   ? 'bg-blue-900/30 text-blue-300 border-blue-800/50' :
                 'bg-emerald-900/30 text-emerald-400 border-emerald-800/50'
               }`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${
                   dataSource === 'cache' ? 'bg-slate-400' :
                   dataSource === 'demo'  ? 'bg-amber-400' :
+                  dataSource === 'csv'   ? 'bg-blue-400' :
                   'bg-emerald-400'
                 }`} />
                 <span className="font-bold">{candles.length.toLocaleString()} velas</span>

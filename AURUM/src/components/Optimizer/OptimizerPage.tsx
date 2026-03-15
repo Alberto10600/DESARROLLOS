@@ -699,7 +699,7 @@ export function OptimizerPage() {
           )}
 
           {/* Historial de observaciones Bayesian */}
-          {bayesianState && (bayesianState.observations?.length ?? 0) > 0 && (
+          {method === 'bayesian' && bayesianState && (bayesianState.observations?.length ?? 0) > 0 && (
             <div className="flex-1 bg-[#070d1a] border border-slate-800 rounded-lg overflow-hidden min-h-0">
               <div className="p-3 border-b border-slate-800">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">

@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useCallback } from 'react'
 import { useAppStore } from './store/useAppStore'
 import { Titlebar } from './components/layout/Titlebar'
 import { Sidebar } from './components/layout/Sidebar'
@@ -314,7 +314,26 @@ function Dashboard() {
 }
 
 export function App() {
-  const { currentPage, backtestResult } = useAppStore()
+  const { currentPage, backtestResult, setConfig } = useAppStore()
+
+  // Restore persisted config from electron-store on startup
+  const restoreConfig = useCallback(async () => {
+    if (!window.electronAPI) return
+    try {
+      const [savedApiKey, savedConfig] = await Promise.all([
+        window.electronAPI.getApiKey(),
+        window.electronAPI.getConfig(),
+      ])
+      const patch: Record<string, unknown> = {}
+      if (savedApiKey && typeof savedApiKey === 'string') patch.apiKey = savedApiKey
+      if (savedConfig && typeof savedConfig === 'object') Object.assign(patch, savedConfig)
+      if (Object.keys(patch).length > 0) setConfig(patch as Parameters<typeof setConfig>[0])
+    } catch {
+      // non-blocking: ignore errors reading stored config
+    }
+  }, [setConfig])
+
+  useEffect(() => { restoreConfig() }, [restoreConfig])
 
   return (
     <div className="flex flex-col h-screen bg-[#040810] text-slate-200 overflow-hidden">

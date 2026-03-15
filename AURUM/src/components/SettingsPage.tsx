@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/useAppStore'
 import { fetchCandles } from '../services/twelveData'
 
@@ -7,10 +7,26 @@ export function SettingsPage() {
   const [apiKey, setApiKey] = useState(config.apiKey)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<'ok' | 'error' | null>(null)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Debounced auto-persist config changes (except apiKey which is saved explicitly)
+  useEffect(() => {
+    if (!window.electronAPI) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      window.electronAPI!.setConfig(config).catch(() => {})
+    }, 500)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+  }, [config])
 
   const saveApiKey = async () => {
     setConfig({ apiKey })
-    if (window.electronAPI) await window.electronAPI.setApiKey(apiKey)
+    if (window.electronAPI) {
+      await window.electronAPI.setApiKey(apiKey)
+      // Also persist the full config so it survives restarts
+      const { config: current } = useAppStore.getState()
+      await window.electronAPI.setConfig({ ...current, apiKey })
+    }
   }
 
   const testApiKey = async () => {
@@ -71,7 +87,7 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <span className="text-xs text-slate-400">Capital inicial por defecto</span>
             <input type="number" value={config.capital} min={100} step={100}
-              onChange={e => setConfig({ capital: Number(e.target.value) })}
+              onChange={e => setConfig({ capital: Number(e.target.value) })}}
               className="w-28 bg-slate-800 text-slate-200 text-xs px-2 py-1 rounded border border-slate-700 text-right"
             />
           </div>
