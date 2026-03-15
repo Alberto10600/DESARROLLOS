@@ -6,7 +6,8 @@ import { BacktestPage } from './components/BacktestPage'
 import { OptimizerPage } from './components/Optimizer/OptimizerPage'
 import { TradesTable } from './components/panels/TradesTable'
 import { SettingsPage } from './components/SettingsPage'
-import { StrategyEditorPage } from './components/StrategyEditor/StrategyEditorPage'
+import { DeployPage } from './components/DeployPage'
+import { MonitorPage } from './components/MonitorPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import type { BacktestMetrics, Trade } from './types'
 
@@ -341,10 +342,11 @@ export function App() {
       <div className="flex flex-1 min-h-0">
         <Sidebar />
         <main className="flex-1 min-w-0 overflow-hidden">
-          {currentPage === 'dashboard'   && <ErrorBoundary><Dashboard /></ErrorBoundary>}
-          {currentPage === 'backtesting' && <ErrorBoundary><BacktestPage /></ErrorBoundary>}
-          {currentPage === 'optimizer'   && <ErrorBoundary><OptimizerPage /></ErrorBoundary>}
-          {currentPage === 'trades'      && (
+          {currentPage === 'workspace' && <ErrorBoundary><BacktestPage /></ErrorBoundary>}
+          {currentPage === 'validate'  && <ErrorBoundary><OptimizerPage /></ErrorBoundary>}
+          {currentPage === 'deploy'    && <ErrorBoundary><DeployPage /></ErrorBoundary>}
+          {currentPage === 'monitor'   && <ErrorBoundary><MonitorPage /></ErrorBoundary>}
+          {currentPage === 'trades'    && (
             <ErrorBoundary>
               <div className="h-full overflow-hidden">
                 {backtestResult ? (
@@ -357,8 +359,7 @@ export function App() {
               </div>
             </ErrorBoundary>
           )}
-          {currentPage === 'strategy'    && <ErrorBoundary><StrategyEditorPage /></ErrorBoundary>}
-          {currentPage === 'settings'    && <ErrorBoundary><SettingsPage /></ErrorBoundary>}
+          {currentPage === 'settings'  && <ErrorBoundary><SettingsPage /></ErrorBoundary>}
         </main>
       </div>
     </div>

@@ -3,6 +3,8 @@ import type {
   AppState,
   AppPage,
   AppConfig,
+  IbkrConfig,
+  EngineStatus,
   Candle,
   BacktestResult,
   StrategyParams,
@@ -22,6 +24,23 @@ const DEFAULT_CONFIG: AppConfig = {
   apiKey: '',
 }
 
+const DEFAULT_IBKR: IbkrConfig = {
+  host: '127.0.0.1',
+  port: 7497,          // paper trading port
+  clientId: 1,
+  accountId: '',
+  isPaper: true,
+}
+
+const DEFAULT_ENGINE: EngineStatus = {
+  ibkrStatus: 'disconnected',
+  isEngineRunning: false,
+  enginePort: 8765,
+  positions: [],
+  dailyPnl: 0,
+  dailyTrades: 0,
+}
+
 const DEFAULT_PARAMS: StrategyParams = {
   swingLookback: 12,
   obLookback: 8,
@@ -34,13 +53,21 @@ const DEFAULT_PARAMS: StrategyParams = {
 
 export const useAppStore = create<AppState>((set) => ({
   // ── Navigation ──────────────────────────────────────────────────────────────
-  currentPage: 'backtesting',
+  currentPage: 'workspace',
   setPage: (page: AppPage) => set({ currentPage: page }),
 
   // ── Config ──────────────────────────────────────────────────────────────────
   config: DEFAULT_CONFIG,
+  ibkrConfig: DEFAULT_IBKR,
   setConfig: (config: Partial<AppConfig>) =>
     set(state => ({ config: { ...state.config, ...config } })),
+  setIbkrConfig: (c: Partial<IbkrConfig>) =>
+    set(state => ({ ibkrConfig: { ...state.ibkrConfig, ...c } })),
+
+  // ── Engine / Live trading ────────────────────────────────────────────────────
+  engineStatus: DEFAULT_ENGINE,
+  setEngineStatus: (s: Partial<EngineStatus>) =>
+    set(state => ({ engineStatus: { ...state.engineStatus, ...s } })),
 
   // ── Candles ─────────────────────────────────────────────────────────────────
   candles: [],

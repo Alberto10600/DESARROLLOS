@@ -255,7 +255,42 @@ export interface AppConfig {
 
 // ─── App State (Zustand) ──────────────────────────────────────────────────────
 
-export type AppPage = 'dashboard' | 'backtesting' | 'optimizer' | 'trades' | 'strategy' | 'settings'
+export type AppPage = 'workspace' | 'validate' | 'deploy' | 'monitor' | 'trades' | 'settings'
+
+// ─── IBKR Connection State ────────────────────────────────────────────────────
+
+export type IbkrStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+
+export interface IbkrConfig {
+  host: string         // TWS host (127.0.0.1)
+  port: number         // TWS port (7497 paper / 7496 live)
+  clientId: number     // IB client ID
+  accountId: string    // IB account (e.g. DU1234567)
+  isPaper: boolean     // paper trading mode
+}
+
+export interface LivePosition {
+  symbol: string
+  direction: 'LONG' | 'SHORT'
+  size: number
+  entryPrice: number
+  currentPrice: number
+  unrealizedPnl: number
+  sl: number
+  tp1: number
+  tp2: number
+  openTime: string
+}
+
+export interface EngineStatus {
+  ibkrStatus: IbkrStatus
+  ibkrError?: string
+  isEngineRunning: boolean   // Python backend alive
+  enginePort: number         // FastAPI port (default 8765)
+  positions: LivePosition[]
+  dailyPnl: number
+  dailyTrades: number
+}
 
 export interface AppState {
   // Navigation
@@ -264,7 +299,13 @@ export interface AppState {
 
   // Config
   config: AppConfig
+  ibkrConfig: IbkrConfig
   setConfig: (config: Partial<AppConfig>) => void
+  setIbkrConfig: (c: Partial<IbkrConfig>) => void
+
+  // Engine / Live trading
+  engineStatus: EngineStatus
+  setEngineStatus: (s: Partial<EngineStatus>) => void
 
   // Candles
   candles: Candle[]
