@@ -325,6 +325,25 @@ export function BacktestPage() {
             onChange={v => setStrategyParams({ slBuffer: v })} />
         </div>
 
+        {/* ── Costes de transacción (realismo IBKR) ───────────────────────── */}
+        <div className="pt-2 border-t border-slate-800">
+          <p className="text-[10px] text-slate-600 uppercase tracking-wider mb-2">Costes Reales (IBKR)</p>
+          <div className="grid grid-cols-2 gap-x-8 gap-y-2">
+            <Slider
+              label="Slippage (pts)"
+              value={strategyParams.slippage ?? 0}
+              min={0} max={3} step={0.1} decimals={1}
+              onChange={v => setStrategyParams({ slippage: v })}
+            />
+            <Slider
+              label="Comisión (€/trade)"
+              value={strategyParams.commission ?? 0}
+              min={0} max={20} step={0.5} decimals={1}
+              onChange={v => setStrategyParams({ commission: v })}
+            />
+          </div>
+        </div>
+
         {/* ── Parámetros avanzados v2 ─────────────────────────────────────── */}
         <div>
           <button

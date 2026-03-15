@@ -185,25 +185,28 @@ function getAvgVolume(candles: Candle[], period: number, index: number): number 
 
 /**
  * Finds the nearest FVG level that can serve as a TP target.
- * For LONG: looks for a bearish FVG (gap down) above current price — price will fill it.
- * For SHORT: looks for a bullish FVG (gap up) below current price — price will fill it.
- * Returns the fill level (midpoint of the gap) or null if none found.
+ * IMPORTANT: Only scans candles BEFORE fromIdx to avoid look-ahead bias.
+ * For LONG: looks for a bearish FVG (gap down) left unfilled above entry price.
+ * For SHORT: looks for a bullish FVG (gap up) left unfilled below entry price.
+ * Returns the midpoint of the nearest qualifying FVG, or null if none found.
  */
 function findNearestFVGTarget(
   candles: Candle[],
   fromIdx: number,
   direction: 'LONG' | 'SHORT',
   entryPrice: number,
-  lookAhead = 50
+  lookback = 50
 ): number | null {
-  const end = Math.min(candles.length - 3, fromIdx + lookAhead)
+  // ← FIX: only look at historical candles, never future ones
+  const end = fromIdx - 3   // must leave room for i+2 check
+  const start = Math.max(0, fromIdx - lookback)
   let bestTarget: number | null = null
   let bestDist = Infinity
 
-  for (let i = Math.max(0, fromIdx - lookAhead); i <= end; i++) {
+  for (let i = start; i <= end; i++) {
     if (i + 2 >= candles.length) break
     if (direction === 'LONG') {
-      // Bearish FVG above entry: candle[i].low > candle[i+2].high — gap down that price left unfilled above
+      // Bearish FVG above entry: candle[i].low > candle[i+2].high
       if (candles[i].low > candles[i + 2].high) {
         const fvgMid = (candles[i].low + candles[i + 2].high) / 2
         if (fvgMid > entryPrice) {
@@ -212,7 +215,7 @@ function findNearestFVGTarget(
         }
       }
     } else {
-      // Bullish FVG below entry: candle[i].high < candle[i+2].low — gap up that price left unfilled below
+      // Bullish FVG below entry: candle[i].high < candle[i+2].low
       if (candles[i].high < candles[i + 2].low) {
         const fvgMid = (candles[i].high + candles[i + 2].low) / 2
         if (fvgMid < entryPrice) {
@@ -319,11 +322,19 @@ export function detectSignals(candles: Candle[], params: StrategyParams): Signal
   const minPeriod = Math.max(swingLookback, obLookback, 200) + 5
   let lastSignalIndex = -Infinity  // para controlar minCandleGap
 
+  // Caché del régimen — se actualiza cada 20 velas para no recalcular en cada iteración
+  let cachedRegimeAllowed = true
+  let lastRegimeUpdate = -Infinity
+
   for (let i = minPeriod; i < candles.length - 2; i++) {
     // ── Filtro de régimen de mercado ──────────────────────────────────────────
-    if (regimeFilter && i % 50 === 0) {
-      const localRegime = detectRegime(candles.slice(Math.max(0, i - 60), i + 1))
-      if (localRegime.regime === 'volatile') continue
+    if (regimeFilter) {
+      if (i - lastRegimeUpdate >= 20) {
+        const localRegime = detectRegime(candles.slice(Math.max(0, i - 60), i + 1))
+        cachedRegimeAllowed = localRegime.regime !== 'volatile'
+        lastRegimeUpdate = i
+      }
+      if (!cachedRegimeAllowed) continue
     }
 
     // ── Filtro de sesión ──────────────────────────────────────────────────────

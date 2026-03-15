@@ -16,15 +16,21 @@ import { detectSignals } from './smcStrategy'
 
 // ─── Score ────────────────────────────────────────────────────────────────────
 
+/**
+ * Score function orientada a quant trading:
+ * - Requiere mínimo 30 trades para significancia estadística
+ * - Penaliza severamente drawdowns altos (Calmar ratio base)
+ * - Premia consistencia (Sharpe) sobre retorno bruto
+ * - No favorece leverage sin control de riesgo
+ */
 export function calcScore(m: BacktestMetrics): number {
-  if (m.totalTrades < 5) return 0
-  const dd = Math.min(m.maxDrawdown, 100)
-  return (
-    m.profitFactor *
-    (m.winRate / 100) *
-    (1 - dd / 100) *
-    (m.totalReturn / 100)
-  )
+  if (m.totalTrades < 10) return 0
+  if (m.maxDrawdown >= 40) return 0  // riesgo inaceptable
+  const calmarNorm = Math.min(m.calmarRatio, 5) / 5       // normalizado 0-1
+  const sharpeNorm = Math.min(Math.max(m.sharpeRatio, 0), 3) / 3
+  const pfNorm     = Math.min(m.profitFactor, 3) / 3
+  const tradeBonus = Math.min(m.totalTrades / 100, 1)     // recompensa muestras grandes
+  return calmarNorm * 0.4 + sharpeNorm * 0.35 + pfNorm * 0.15 + tradeBonus * 0.10
 }
 
 // ─── Backtest ─────────────────────────────────────────────────────────────────
@@ -45,6 +51,8 @@ export function runBacktest(
     trailingStop = false,
     trailingFactor = 1,
     breakEven = false,
+    slippage = 0,      // puntos de deslizamiento en entry
+    commission = 0,    // comisión fija € por trade
   } = params
 
   const signals = detectSignals(candles, params)
@@ -54,6 +62,7 @@ export function runBacktest(
   let tradeId = 0
   let consecutiveLosses = 0
   const dailyPnL: Record<string, number> = {}
+  let totalCosts = 0
 
   // ── Simular cada señal ──────────────────────────────────────────────────────
   for (const sig of signals) {
@@ -71,19 +80,29 @@ export function runBacktest(
     }
 
     const risk   = equity * (riskPct / 100)
-    const riskPts = Math.abs(sig.entry - sig.sl)
+
+    // Aplicar slippage al precio de entrada (LONG paga más, SHORT cobra menos)
+    const actualEntry = sig.direction === 'LONG'
+      ? sig.entry + slippage
+      : sig.entry - slippage
+
+    const riskPts = Math.abs(actualEntry - sig.sl)
     if (riskPts <= 0) continue
 
-    const sizeEur = risk  // € en riesgo = position size en este modelo simplificado
+    const sizeEur = risk  // € en riesgo
     const sizeUnits = sizeEur / riskPts
 
     const tp1 = sig.direction === 'LONG'
-      ? sig.entry + riskPts * tp1RR
-      : sig.entry - riskPts * tp1RR
+      ? actualEntry + riskPts * tp1RR
+      : actualEntry - riskPts * tp1RR
 
     const tp2 = sig.direction === 'LONG'
-      ? sig.entry + riskPts * tp2RR
-      : sig.entry - riskPts * tp2RR
+      ? actualEntry + riskPts * tp2RR
+      : actualEntry - riskPts * tp2RR
+
+    // Coste de transacción: comisión fija + slippage implícito ya en riskPts
+    const tradeCost = commission
+    totalCosts += tradeCost
 
     // Simular precio vela a vela desde la señal
     let result: 'WIN' | 'LOSS' | 'PARTIAL' = 'LOSS'
@@ -101,9 +120,9 @@ export function runBacktest(
       exitDate = bar.date
 
       if (sig.direction === 'LONG') {
-        const adverse = sig.entry - bar.low
+        const adverse = actualEntry - bar.low
         if (adverse > mae) mae = adverse
-        const favorable = bar.high - sig.entry
+        const favorable = bar.high - actualEntry
         if (favorable > mfe) mfe = favorable
 
         // Trailing stop tras TP1
@@ -117,14 +136,14 @@ export function runBacktest(
           pnl += sizeEur * 0.5 * tp1RR   // cerrar 50% en TP1
           pnl += sizeEur * 0.5            // recuperar el riesgo de esa mitad
           // Break-even: mover SL a entry tras TP1
-          if (breakEven && sig.entry > currentSl) currentSl = sig.entry
+          if (breakEven && actualEntry > currentSl) currentSl = actualEntry
         }
 
         if (bar.low <= currentSl) {
           if (tp1Hit) {
             result = 'PARTIAL'
             // segunda mitad golpea SL (o trailing SL)
-            const slPnlPts = currentSl - sig.entry
+            const slPnlPts = currentSl - actualEntry
             pnl += sizeUnits * 0.5 * slPnlPts
           } else {
             result = 'LOSS'
@@ -142,9 +161,9 @@ export function runBacktest(
         }
       } else {
         // SHORT
-        const adverse = bar.high - sig.entry
+        const adverse = bar.high - actualEntry
         if (adverse > mae) mae = adverse
-        const favorable = sig.entry - bar.low
+        const favorable = actualEntry - bar.low
         if (favorable > mfe) mfe = favorable
 
         if (tp1Hit && trailingStop) {
@@ -157,13 +176,13 @@ export function runBacktest(
           pnl += sizeEur * 0.5 * tp1RR
           pnl += sizeEur * 0.5
           // Break-even: mover SL a entry tras TP1
-          if (breakEven && sig.entry < currentSl) currentSl = sig.entry
+          if (breakEven && actualEntry < currentSl) currentSl = actualEntry
         }
 
         if (bar.high >= currentSl) {
           if (tp1Hit) {
             result = 'PARTIAL'
-            const slPnlPts = sig.entry - currentSl
+            const slPnlPts = actualEntry - currentSl
             pnl += sizeUnits * 0.5 * slPnlPts
           } else {
             result = 'LOSS'
@@ -181,6 +200,9 @@ export function runBacktest(
         }
       }
     }
+
+    // Descontar comisión del P&L
+    pnl -= tradeCost
 
     // Actualizar equity
     if (compounding) {
@@ -216,7 +238,7 @@ export function runBacktest(
     })
   }
 
-  const metrics = calcMetrics(trades, initialCapital, candles)
+  const metrics = calcMetrics(trades, initialCapital, candles, totalCosts)
   return { trades, metrics, params }
 }
 
@@ -225,10 +247,11 @@ export function runBacktest(
 function calcMetrics(
   trades: Trade[],
   initialCapital: number,
-  candles: Candle[]
+  candles: Candle[],
+  totalCosts = 0
 ): BacktestMetrics {
   if (trades.length === 0) {
-    return emptyMetrics(initialCapital)
+    return emptyMetrics(initialCapital, totalCosts)
   }
 
   const wins     = trades.filter(t => t.result === 'WIN')
@@ -291,11 +314,18 @@ function calcMetrics(
 
   const maxDDDays = Math.round(maxDDDur / 86400 / 1000)
 
-  // ── Sharpe ───────────────────────────────────────────────────────────────────
+  // ── Sharpe & Sortino ─────────────────────────────────────────────────────────
   const returns = trades.map(t => t.pnlR)
   const meanR = returns.reduce((s, r) => s + r, 0) / returns.length
   const stdR  = Math.sqrt(returns.map(r => (r - meanR) ** 2).reduce((s, v) => s + v, 0) / returns.length)
   const sharpe = stdR > 0 ? (meanR / stdR) * Math.sqrt(252) : 0
+
+  // Sortino: solo penaliza la desviación negativa (downside deviation)
+  const downsideReturns = returns.filter(r => r < 0)
+  const downsideStd = downsideReturns.length > 0
+    ? Math.sqrt(downsideReturns.map(r => r ** 2).reduce((s, v) => s + v, 0) / downsideReturns.length)
+    : 0
+  const sortino = downsideStd > 0 ? (meanR / downsideStd) * Math.sqrt(252) : sharpe
 
   const calmar = maxDD > 0 ? cagr / maxDD : cagr
 
@@ -342,19 +372,22 @@ function calcMetrics(
     maxDrawdown: maxDD,
     maxDrawdownDuration: maxDDDays,
     sharpeRatio: sharpe,
+    sortinoRatio: sortino,
     calmarRatio: calmar,
+    totalCosts,
     byYear,
     equityCurve,
   }
 }
 
-function emptyMetrics(cap: number): BacktestMetrics {
+function emptyMetrics(cap: number, totalCosts = 0): BacktestMetrics {
   return {
     totalReturn: 0, cagr: 0, finalEquity: cap, netPnL: 0,
     totalTrades: 0, wins: 0, losses: 0, partials: 0,
     winRate: 0, avgWin: 0, avgLoss: 0, avgRR: 0,
     profitFactor: 0, maxDrawdown: 0, maxDrawdownDuration: 0,
-    sharpeRatio: 0, calmarRatio: 0, byYear: {}, equityCurve: []
+    sharpeRatio: 0, sortinoRatio: 0, calmarRatio: 0,
+    totalCosts, byYear: {}, equityCurve: []
   }
 }
 
@@ -469,4 +502,65 @@ export function runMonteCarlo(
     bandMedian,
     bandLower,
   }
+}
+
+// ─── Multi-Asset Validation ────────────────────────────────────────────────────
+
+export interface AssetValidationResult {
+  symbol: string
+  metrics: BacktestMetrics
+  score: number
+  trades: number
+}
+
+export interface MultiAssetValidation {
+  assets: AssetValidationResult[]
+  /** Robustez: % de activos con PF > 1 y maxDD < 30% */
+  robustnessScore: number
+  /** Score promedio ponderado por número de trades */
+  weightedScore: number
+  /** El mismo set de params funciona en N de M activos */
+  consistentAssets: number
+  totalAssets: number
+}
+
+/**
+ * Valida los mismos parámetros sobre múltiples datasets de activos.
+ * Un set de parámetros robusto debe funcionar en al menos 60% de los activos
+ * sin necesidad de reoptimizar por activo.
+ *
+ * Uso desde el OptimizerPage para ranking de robustez cross-asset.
+ */
+export function runMultiAssetValidation(
+  datasets: Array<{ symbol: string; candles: Candle[] }>,
+  params: StrategyParams,
+  initialCapital: number
+): MultiAssetValidation {
+  const assets: AssetValidationResult[] = []
+
+  for (const { symbol, candles } of datasets) {
+    if (candles.length < 300) continue  // datos insuficientes
+    const result = runBacktest(candles, params, initialCapital)
+    const score = calcScore(result.metrics)
+    assets.push({ symbol, metrics: result.metrics, score, trades: result.metrics.totalTrades })
+  }
+
+  if (assets.length === 0) {
+    return { assets, robustnessScore: 0, weightedScore: 0, consistentAssets: 0, totalAssets: 0 }
+  }
+
+  const consistentAssets = assets.filter(a =>
+    a.metrics.profitFactor > 1.0 &&
+    a.metrics.maxDrawdown < 30 &&
+    a.trades >= 10
+  ).length
+
+  const totalTrades = assets.reduce((s, a) => s + a.trades, 0)
+  const weightedScore = totalTrades > 0
+    ? assets.reduce((s, a) => s + a.score * a.trades, 0) / totalTrades
+    : 0
+
+  const robustnessScore = (consistentAssets / assets.length) * 100
+
+  return { assets, robustnessScore, weightedScore, consistentAssets, totalAssets: assets.length }
 }

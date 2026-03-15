@@ -123,7 +123,7 @@ export function KPIPanel({ metrics, capital }: Props) {
         <KPICard
           label="Profit Factor"
           value={metrics.profitFactor > 99 ? '∞' : metrics.profitFactor.toFixed(2)}
-          sub={`Sharpe: ${metrics.sharpeRatio.toFixed(2)}`}
+          sub={`Sharpe ${metrics.sharpeRatio.toFixed(2)} · Sortino ${(metrics.sortinoRatio ?? 0).toFixed(2)}`}
           color={pfColor}
           sparkValues={yearlyPnL}
           sparkColor={metrics.profitFactor > 1.5 ? '#34d399' : metrics.profitFactor > 1 ? '#f59e0b' : '#f87171'}
@@ -143,8 +143,8 @@ export function KPIPanel({ metrics, capital }: Props) {
         <KPICard
           label="Total Trades"
           value={metrics.totalTrades.toString()}
-          sub={`Avg P&L: ${metrics.netPnL >= 0 ? '+' : ''}€${(metrics.netPnL / (metrics.totalTrades || 1)).toFixed(0)}/trade`}
-          color="text-slate-200"
+          sub={`Avg €${(metrics.netPnL / (metrics.totalTrades || 1)).toFixed(0)}/trade · Costes: €${(metrics.totalCosts ?? 0).toFixed(0)}`}
+          color={metrics.totalTrades >= 30 ? 'text-slate-200' : 'text-amber-400'}
           sparkValues={years.map(y => metrics.byYear[y].trades)}
           sparkColor="#94a3b8"
         />

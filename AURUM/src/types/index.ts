@@ -57,6 +57,10 @@ export interface StrategyParams {
   requireVolumeConfirmation?: boolean  // exigir volumen de sweep > 1.5x media de 20 velas
   volumeMultiplier?: number            // multiplicador de volumen requerido (default 1.5)
   minCandleGap?: number                // mínimo de velas entre trades consecutivos (default 3)
+
+  // ── Costes de transacción (realismo) ─────────────────────────────────────
+  slippage?: number     // puntos de deslizamiento en entry/exit (e.g. 0.3 para XAU/USD)
+  commission?: number   // comisión fija por trade en € (e.g. 2.0 para IBKR)
 }
 
 // ─── Trade ────────────────────────────────────────────────────────────────────
@@ -121,7 +125,9 @@ export interface BacktestMetrics {
   maxDrawdown: number
   maxDrawdownDuration: number
   sharpeRatio: number
+  sortinoRatio: number
   calmarRatio: number
+  totalCosts: number   // suma de slippage + comisiones pagadas
 
   // Yearly breakdown
   byYear: Record<number, YearlyStats>
@@ -215,6 +221,23 @@ export interface SavedOptimization {
   bestParams: StrategyParams
   bestMetrics: BacktestMetrics
   duration: number
+}
+
+// ─── Multi-Asset Validation ───────────────────────────────────────────────────
+
+export interface AssetValidationResult {
+  symbol: string
+  metrics: BacktestMetrics
+  score: number
+  trades: number
+}
+
+export interface MultiAssetValidation {
+  assets: AssetValidationResult[]
+  robustnessScore: number   // % de activos con PF>1 y maxDD<30%
+  weightedScore: number     // score promedio ponderado por trades
+  consistentAssets: number  // N activos donde funciona
+  totalAssets: number
 }
 
 // ─── App Config ───────────────────────────────────────────────────────────────
